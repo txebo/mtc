@@ -4,6 +4,7 @@
 #include <QFrame>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -51,10 +52,12 @@ MainWindow::MainWindow(SessionManager &sessionManager,
       deviceManager_(deviceManager),
       analyticsStore_(analyticsStore) {
     setWindowTitle("MTC");
-    resize(1220, 760);
+    resize(1280, 820);
 
     auto *central = new QWidget(this);
     auto *rootLayout = new QVBoxLayout(central);
+    rootLayout->setContentsMargins(24, 20, 24, 20);
+    rootLayout->setSpacing(16);
 
     auto *title = new QLabel("MTC - Core Telegram bootstrap", central);
     title->setStyleSheet("font-size: 24px; font-weight: 700;");
@@ -67,11 +70,25 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     subtitle->setWordWrap(true);
     rootLayout->addWidget(subtitle);
 
-    auto *topGrid = new QGridLayout();
-    rootLayout->addLayout(topGrid);
+    auto *workspaceLayout = new QHBoxLayout();
+    workspaceLayout->setSpacing(18);
+    rootLayout->addLayout(workspaceLayout, 1);
+
+    auto *leftColumn = new QVBoxLayout();
+    leftColumn->setSpacing(14);
+    workspaceLayout->addLayout(leftColumn, 5);
+
+    auto *rightColumn = new QVBoxLayout();
+    rightColumn->setSpacing(14);
+    workspaceLayout->addLayout(rightColumn, 4);
 
     auto *loginBox = new QGroupBox("Bootstrap de TDLib", central);
     auto *loginLayout = new QFormLayout(loginBox);
+    loginLayout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+    loginLayout->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    loginLayout->setFormAlignment(Qt::AlignTop);
+    loginLayout->setHorizontalSpacing(14);
+    loginLayout->setVerticalSpacing(10);
 
     auto *profileNameInput = new QLineEdit(loginBox);
     profileNameInput->setPlaceholderText("Cuenta principal");
@@ -93,11 +110,15 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     phoneInput->setText(QProcessEnvironment::systemEnvironment().value("MTC_TDLIB_PHONE"));
     loginLayout->addRow("Telefono", phoneInput);
 
+    auto *accountActionsLayout = new QHBoxLayout();
+    accountActionsLayout->setSpacing(10);
     auto *submitButton = new QPushButton("Iniciar flujo", loginBox);
-    loginLayout->addRow(submitButton);
-
     auto *saveProfileButton = new QPushButton("Guardar perfil", loginBox);
-    loginLayout->addRow(saveProfileButton);
+    submitButton->setMinimumHeight(34);
+    saveProfileButton->setMinimumHeight(34);
+    accountActionsLayout->addWidget(submitButton);
+    accountActionsLayout->addWidget(saveProfileButton);
+    loginLayout->addRow("Acciones", accountActionsLayout);
 
     auto *codeInput = new QLineEdit(loginBox);
     codeInput->setPlaceholderText("12345");
@@ -105,7 +126,8 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     loginLayout->addRow("Codigo", codeInput);
 
     auto *submitCodeButton = new QPushButton("Enviar codigo", loginBox);
-    loginLayout->addRow(submitCodeButton);
+    submitCodeButton->setMinimumHeight(34);
+    loginLayout->addRow("Validacion", submitCodeButton);
 
     auto *authStateLabel = new QLabel(loginBox);
     authStateLabel->setWordWrap(true);
@@ -115,10 +137,12 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     diagnosticLabel->setWordWrap(true);
     loginLayout->addRow("Diagnostico", diagnosticLabel);
 
-    topGrid->addWidget(loginBox, 0, 0);
+    leftColumn->addWidget(loginBox);
 
     auto *profilesBox = new QGroupBox("Perfiles locales", central);
     auto *profilesLayout = new QVBoxLayout(profilesBox);
+    profilesLayout->setContentsMargins(14, 16, 14, 14);
+    profilesLayout->setSpacing(10);
     auto *profilesHint = new QLabel(
         "Guarda credenciales base por cuenta para retomar el bootstrap sin depender de variables de entorno.",
         profilesBox);
@@ -126,11 +150,15 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     profilesLayout->addWidget(profilesHint);
 
     auto *profilesList = new QListWidget(profilesBox);
+    profilesList->setMinimumHeight(210);
     profilesLayout->addWidget(profilesList);
 
     auto *profilesActionsLayout = new QHBoxLayout();
+    profilesActionsLayout->setSpacing(10);
     auto *loadProfileButton = new QPushButton("Cargar perfil", profilesBox);
     auto *removeProfileButton = new QPushButton("Eliminar perfil", profilesBox);
+    loadProfileButton->setMinimumHeight(34);
+    removeProfileButton->setMinimumHeight(34);
     profilesActionsLayout->addWidget(loadProfileButton);
     profilesActionsLayout->addWidget(removeProfileButton);
     profilesLayout->addLayout(profilesActionsLayout);
@@ -139,10 +167,11 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     profilesStatusLabel->setWordWrap(true);
     profilesLayout->addWidget(profilesStatusLabel);
 
-    topGrid->addWidget(profilesBox, 0, 1);
+    rightColumn->addWidget(profilesBox, 1);
 
     auto *notesBox = new QGroupBox("Siguiente integracion real", central);
     auto *notesLayout = new QVBoxLayout(notesBox);
+    notesLayout->setContentsMargins(14, 16, 14, 14);
     auto *notes = new QLabel(
         "1. detectar TDLib por CMake\n"
         "2. enviar setTdlibParameters\n"
@@ -151,47 +180,58 @@ MainWindow::MainWindow(SessionManager &sessionManager,
         notesBox);
     notes->setWordWrap(true);
     notesLayout->addWidget(notes);
-    topGrid->addWidget(notesBox, 1, 0, 1, 2);
+    rightColumn->addWidget(notesBox);
 
     auto *separator = new QFrame(central);
     separator->setFrameShape(QFrame::HLine);
     rootLayout->addWidget(separator);
 
+    auto *bottomLayout = new QHBoxLayout();
+    bottomLayout->setSpacing(18);
+    rootLayout->addLayout(bottomLayout, 1);
+
     auto *telegramDataBox = new QGroupBox("Lectura desde TDLib", central);
     auto *telegramDataLayout = new QVBoxLayout(telegramDataBox);
+    telegramDataLayout->setContentsMargins(14, 16, 14, 14);
+    telegramDataLayout->setSpacing(10);
     auto *accountLabel = new QLabel("Cuenta: pendiente", telegramDataBox);
     accountLabel->setWordWrap(true);
     telegramDataLayout->addWidget(accountLabel);
     auto *chatList = new QListWidget(telegramDataBox);
+    chatList->setMinimumHeight(220);
     telegramDataLayout->addWidget(chatList);
-    rootLayout->addWidget(telegramDataBox);
+    bottomLayout->addWidget(telegramDataBox, 3);
 
-    auto *modulesGrid = new QGridLayout();
-    rootLayout->addLayout(modulesGrid);
+    auto *modulesBox = new QGroupBox("Estado de modulos", central);
+    auto *modulesGrid = new QGridLayout(modulesBox);
+    modulesGrid->setContentsMargins(14, 16, 14, 14);
+    modulesGrid->setHorizontalSpacing(12);
+    modulesGrid->setVerticalSpacing(12);
+    bottomLayout->addWidget(modulesBox, 2);
 
     modulesGrid->addWidget(buildModuleBox("Sesiones",
                                           QString::fromStdString(sessionManager_.status()),
-                                          central),
+                                          modulesBox),
                            0,
                            0);
     modulesGrid->addWidget(buildModuleBox("Telegram",
                                           QString::fromStdString(tdLibAdapter_.status()),
-                                          central),
+                                          modulesBox),
                            0,
                            1);
     modulesGrid->addWidget(buildModuleBox("Llamadas",
                                           QString::fromStdString(callController_.status()),
-                                          central),
+                                          modulesBox),
                            1,
                            0);
     modulesGrid->addWidget(buildModuleBox("Dispositivos",
                                           QString::fromStdString(deviceManager_.status()),
-                                          central),
+                                          modulesBox),
                            1,
                            1);
     modulesGrid->addWidget(buildModuleBox("Analitica",
                                           QString::fromStdString(analyticsStore_.status()),
-                                          central),
+                                          modulesBox),
                            2,
                            0,
                            1,

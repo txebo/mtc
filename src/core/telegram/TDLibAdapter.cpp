@@ -42,7 +42,7 @@ void TDLibAdapter::initialize() {
         tdLibAvailable_ = true;
         pollTimer_->start();
         setAuthorizationState(AuthorizationState::WaitingParameters,
-                              "TDLib disponible en runtime. Cliente td_json inicializado; falta enviar parametros, telefono y continuar el flujo de autorizacion.");
+                              "TDLib disponible en runtime. Esperando el estado de autorizacion inicial para continuar.");
         return;
     }
 #endif
@@ -58,6 +58,13 @@ void TDLibAdapter::initialize() {
 void TDLibAdapter::submitBootstrap(const QString &apiId,
                                    const QString &apiHash,
                                    const QString &phoneNumber) {
+    if (authorizationState_ == AuthorizationState::Ready) {
+        requestInitialData();
+        setAuthorizationState(AuthorizationState::Ready,
+                              "La sesion actual ya estaba autenticada. Se reutilizo la sesion local y se refrescaron los datos.");
+        return;
+    }
+
     apiId_ = apiId.trimmed();
     apiHash_ = apiHash.trimmed();
     phoneNumber_ = phoneNumber.trimmed();
@@ -91,6 +98,13 @@ void TDLibAdapter::submitBootstrap(const QString &apiId,
 
 void TDLibAdapter::submitAuthenticationCode(const QString &code) {
     const QString trimmedCode = code.trimmed();
+
+    if (authorizationState_ == AuthorizationState::Ready) {
+        requestInitialData();
+        setAuthorizationState(AuthorizationState::Ready,
+                              "La sesion actual ya estaba autenticada. No hace falta reenviar un codigo.");
+        return;
+    }
 
     if (!tdLibAvailable_) {
         setAuthorizationState(AuthorizationState::MissingDependency,
@@ -155,6 +169,18 @@ void TDLibAdapter::handleResponse(const char *response) {
         return;
     }
 
+    if (payload.contains("\"authorizationStateWaitPassword\"")) {
+        setAuthorizationState(AuthorizationState::WaitingPassword,
+                              "La cuenta requiere verificacion en dos pasos. Falta capturar la contrasena de Telegram.");
+        return;
+    }
+
+    if (payload.contains("\"authorizationStateWaitOtherDeviceConfirmation\"")) {
+        setAuthorizationState(AuthorizationState::WaitingOtherDeviceConfirmation,
+                              "Telegram pide confirmar el inicio de sesion desde otro dispositivo ya autenticado.");
+        return;
+    }
+
     if (payload.contains("\"authorizationStateReady\"")) {
         requestInitialData();
         setAuthorizationState(AuthorizationState::Ready,
@@ -170,11 +196,6 @@ void TDLibAdapter::handleResponse(const char *response) {
         return;
     }
 
-    if (payload.contains("\"@type\":\"error\"")) {
-        setAuthorizationState(AuthorizationState::Failed, payload);
-        return;
-    }
-
     const QJsonDocument document = QJsonDocument::fromJson(payload.toUtf8());
     if (!document.isObject()) {
         return;
@@ -182,6 +203,11 @@ void TDLibAdapter::handleResponse(const char *response) {
 
     const QJsonObject object = document.object();
     const QString type = object.value("@type").toString();
+
+    if (type == "error") {
+        setAuthorizationState(AuthorizationState::Failed, extractTdLibErrorMessage(object));
+        return;
+    }
 
     if (type == "user") {
         const QString firstName = object.value("first_name").toString().trimmed();
@@ -289,6 +315,10 @@ QString TDLibAdapter::authorizationStateLabel() const {
             return "Esperando telefono";
         case AuthorizationState::WaitingCode:
             return "Esperando codigo";
+        case AuthorizationState::WaitingPassword:
+            return "Esperando contrasena";
+        case AuthorizationState::WaitingOtherDeviceConfirmation:
+            return "Esperando confirmacion";
         case AuthorizationState::Ready:
             return "Listo";
         case AuthorizationState::Failed:
@@ -320,6 +350,42 @@ std::string TDLibAdapter::status() const {
     }
 
     return stream.str();
+}
+
+QString TDLibAdapter::extractTdLibErrorMessage(const QJsonObject &object) const {
+    const int code = object.value("code").toInt();
+    const QString message = object.value("message").toString().trimmed();
+
+    if (message.isEmpty()) {
+        return QString("TDLib devolvio un error sin detalle adicional (codigo %1).").arg(code);
+    }
+
+    if (message.contains("PHONE_NUMBER_INVALID", Qt::CaseInsensitive)) {
+        return "El numero de telefono no es valido para Telegram. Revisa el formato internacional.";
+    }
+
+    if (message.contains("API_ID_INVALID", Qt::CaseInsensitive)
+        || message.contains("API_ID_PUBLISHED_FLOOD", Qt::CaseInsensitive)) {
+        return "El api_id o api_hash no fue aceptado por Telegram. Revisa las credenciales de TDLib.";
+    }
+
+    if (message.contains("PHONE_CODE_INVALID", Qt::CaseInsensitive)) {
+        return "El codigo ingresado no es correcto. Captura el codigo mas reciente enviado por Telegram.";
+    }
+
+    if (message.contains("PHONE_CODE_EXPIRED", Qt::CaseInsensitive)) {
+        return "El codigo ya expiro. Vuelve a solicitar uno nuevo e intentalo otra vez.";
+    }
+
+    if (message.contains("PASSWORD_HASH_INVALID", Qt::CaseInsensitive)) {
+        return "La verificacion en dos pasos fallo. La contrasena de Telegram no coincide.";
+    }
+
+    if (message.contains("AUTH_KEY_UNREGISTERED", Qt::CaseInsensitive)) {
+        return "La sesion local ya no es valida. Conviene reiniciar el flujo de autorizacion desde cero.";
+    }
+
+    return QString("TDLib error %1: %2").arg(code).arg(message);
 }
 
 void TDLibAdapter::setAuthorizationState(AuthorizationState state, const QString &diagnosticMessage) {

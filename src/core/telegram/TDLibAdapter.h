@@ -18,6 +18,8 @@ enum class AuthorizationState {
     WaitingParameters,
     WaitingPhoneNumber,
     WaitingCode,
+    WaitingPassword,
+    WaitingOtherDeviceConfirmation,
     Ready,
     Failed,
 };
@@ -53,6 +55,7 @@ private:
     void handleResponse(const char *response);
     void requestInitialData();
     void submitTdlibParameters();
+    QString extractTdLibErrorMessage(const QJsonObject &object) const;
     void setAuthorizationState(AuthorizationState state, const QString &diagnosticMessage);
 
     bool tdLibAvailable_ = false;
