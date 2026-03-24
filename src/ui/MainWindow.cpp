@@ -5,12 +5,14 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QComboBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QProcessEnvironment>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QString>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -67,19 +69,24 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     setWindowTitle("MTC");
     resize(1280, 820);
 
-    auto *central = new QWidget(this);
-    auto *rootLayout = new QVBoxLayout(central);
+    auto *scrollArea = new QScrollArea(this);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+
+    auto *content = new QWidget(scrollArea);
+    auto *rootLayout = new QVBoxLayout(content);
     rootLayout->setContentsMargins(24, 20, 24, 20);
     rootLayout->setSpacing(16);
 
-    auto *title = new QLabel("MTC - Core Telegram bootstrap", central);
+    auto *title = new QLabel("MTC - Core Telegram bootstrap", content);
     title->setStyleSheet("font-size: 24px; font-weight: 700;");
     rootLayout->addWidget(title);
 
     auto *subtitle = new QLabel(
         "Base de autenticacion y estados de autorizacion para la Etapa 1. "
         "Si TDLib no esta instalada, la UI sigue permitiendo validar el flujo.",
-        central);
+        content);
     subtitle->setWordWrap(true);
     rootLayout->addWidget(subtitle);
 
@@ -95,103 +102,150 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     rightColumn->setSpacing(14);
     workspaceLayout->addLayout(rightColumn, 4);
 
-    auto *loginBox = new QGroupBox("Bootstrap de TDLib", central);
-    auto *loginLayout = new QFormLayout(loginBox);
-    loginLayout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
-    loginLayout->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    loginLayout->setFormAlignment(Qt::AlignTop);
-    loginLayout->setHorizontalSpacing(14);
-    loginLayout->setVerticalSpacing(10);
+    auto *loginBox = new QGroupBox("Panel de cuenta Telegram", content);
+    auto *loginLayout = new QVBoxLayout(loginBox);
+    loginLayout->setContentsMargins(14, 16, 14, 14);
+    loginLayout->setSpacing(12);
+
+    auto *panelIntro = new QLabel(
+        "Usa este panel como asistente: prepara credenciales, valida la cuenta y controla la sesion actual desde un solo lugar.",
+        loginBox);
+    panelIntro->setWordWrap(true);
+    loginLayout->addWidget(panelIntro);
 
     auto *stepLabel = buildInfoPanel(
         "font-weight: 700; background: #f4f7fb; border: 1px solid #d7e0ea; border-radius: 8px;",
         loginBox);
-    loginLayout->addRow("Paso actual", stepLabel);
-
     auto *stepGuideLabel = buildInfoPanel(
         "color: #4f5d6b; background: #fafbfc; border: 1px solid #dfe5eb; border-radius: 8px;",
         loginBox);
-    stepGuideLabel->setMinimumHeight(72);
-    stepGuideLabel->setText("1. Credenciales  2. Telefono  3. Codigo  4. Contrasena  5. Listo");
-    loginLayout->addRow("Guia", stepGuideLabel);
+    stepGuideLabel->setMinimumHeight(156);
+    stepGuideLabel->setText(
+        "Fases de validacion:\n"
+        "Fase 1. Preparar credenciales y perfiles.\n"
+        "Fase 2. Enviar telefono.\n"
+        "Fase 3. Validar codigo.\n"
+        "Fase 4. Validar contrasena o confirmacion externa.\n"
+        "Fase 5. Revisar sesion, chats y controles finales.");
 
-    auto *profileNameInput = new QLineEdit(loginBox);
+    auto *phaseSelector = new QComboBox(loginBox);
+    phaseSelector->setMinimumHeight(34);
+
+    auto *phaseChecklistLabel = buildInfoPanel(
+        "background: #f9fafb; border: 1px solid #d9dee5; border-radius: 8px;",
+        loginBox);
+    phaseChecklistLabel->setMinimumHeight(156);
+
+    loginLayout->addWidget(stepLabel);
+    loginLayout->addWidget(stepGuideLabel);
+    loginLayout->addWidget(phaseSelector);
+    loginLayout->addWidget(phaseChecklistLabel);
+
+    auto *accountBox = new QGroupBox("Preparar cuenta", loginBox);
+    auto *accountLayout = new QFormLayout(accountBox);
+    accountLayout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+    accountLayout->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    accountLayout->setFormAlignment(Qt::AlignTop);
+    accountLayout->setHorizontalSpacing(14);
+    accountLayout->setVerticalSpacing(10);
+
+    auto *profileNameInput = new QLineEdit(accountBox);
     profileNameInput->setPlaceholderText("Cuenta principal");
-    loginLayout->addRow("Alias", profileNameInput);
+    accountLayout->addRow("Alias", profileNameInput);
 
-    auto *apiIdInput = new QLineEdit(loginBox);
+    auto *apiIdInput = new QLineEdit(accountBox);
     apiIdInput->setPlaceholderText("api_id");
     apiIdInput->setText(QProcessEnvironment::systemEnvironment().value("MTC_TDLIB_API_ID"));
-    loginLayout->addRow("API ID", apiIdInput);
+    accountLayout->addRow("API ID", apiIdInput);
 
-    auto *apiHashInput = new QLineEdit(loginBox);
+    auto *apiHashInput = new QLineEdit(accountBox);
     apiHashInput->setPlaceholderText("api_hash");
     apiHashInput->setText(QProcessEnvironment::systemEnvironment().value("MTC_TDLIB_API_HASH"));
-    loginLayout->addRow("API Hash", apiHashInput);
+    accountLayout->addRow("API Hash", apiHashInput);
     apiHashInput->setEchoMode(QLineEdit::Password);
 
-    auto *phoneInput = new QLineEdit(loginBox);
+    auto *phoneInput = new QLineEdit(accountBox);
     phoneInput->setPlaceholderText("+52...");
     phoneInput->setText(QProcessEnvironment::systemEnvironment().value("MTC_TDLIB_PHONE"));
-    loginLayout->addRow("Telefono", phoneInput);
+    accountLayout->addRow("Telefono", phoneInput);
 
     auto *sessionActionsLayout = new QHBoxLayout();
     sessionActionsLayout->setSpacing(10);
-    auto *submitButton = new QPushButton("Iniciar flujo", loginBox);
-    auto *saveProfileButton = new QPushButton("Guardar perfil", loginBox);
+    auto *submitButton = new QPushButton("Iniciar flujo", accountBox);
+    auto *saveProfileButton = new QPushButton("Guardar perfil", accountBox);
     submitButton->setMinimumHeight(34);
     saveProfileButton->setMinimumHeight(34);
     sessionActionsLayout->addWidget(submitButton);
     sessionActionsLayout->addWidget(saveProfileButton);
-    loginLayout->addRow("Sesion", sessionActionsLayout);
+    accountLayout->addRow("Acciones", sessionActionsLayout);
+    loginLayout->addWidget(accountBox);
+
+    auto *authBox = new QGroupBox("Validar acceso", loginBox);
+    auto *authLayout = new QFormLayout(authBox);
+    authLayout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+    authLayout->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    authLayout->setFormAlignment(Qt::AlignTop);
+    authLayout->setHorizontalSpacing(14);
+    authLayout->setVerticalSpacing(10);
 
     auto *phoneActionsLayout = new QHBoxLayout();
     phoneActionsLayout->setSpacing(10);
-    auto *sendPhoneButton = new QPushButton("Enviar telefono", loginBox);
-    auto *submitCodeButton = new QPushButton("Enviar codigo", loginBox);
+    auto *sendPhoneButton = new QPushButton("Enviar telefono", authBox);
+    auto *submitCodeButton = new QPushButton("Enviar codigo", authBox);
     sendPhoneButton->setMinimumHeight(34);
     submitCodeButton->setMinimumHeight(34);
     phoneActionsLayout->addWidget(sendPhoneButton);
     phoneActionsLayout->addWidget(submitCodeButton);
-    loginLayout->addRow("Validacion", phoneActionsLayout);
+    authLayout->addRow("Telefono y codigo", phoneActionsLayout);
 
-    auto *codeInput = new QLineEdit(loginBox);
+    auto *codeInput = new QLineEdit(authBox);
     codeInput->setPlaceholderText("12345");
     codeInput->setText(QProcessEnvironment::systemEnvironment().value("MTC_TDLIB_CODE"));
-    loginLayout->addRow("Codigo", codeInput);
+    authLayout->addRow("Codigo", codeInput);
 
-    auto *passwordInput = new QLineEdit(loginBox);
+    auto *passwordInput = new QLineEdit(authBox);
     passwordInput->setPlaceholderText("Contrasena 2FA");
     passwordInput->setEchoMode(QLineEdit::Password);
-    loginLayout->addRow("Contrasena", passwordInput);
+    authLayout->addRow("Contrasena", passwordInput);
 
-    auto *securityActionsLayout = new QHBoxLayout();
-    securityActionsLayout->setSpacing(10);
-    auto *submitPasswordButton = new QPushButton("Enviar contrasena", loginBox);
-    auto *logoutButton = new QPushButton("Cerrar sesion", loginBox);
-    auto *resetSessionButton = new QPushButton("Reiniciar sesion", loginBox);
+    auto *submitPasswordButton = new QPushButton("Enviar contrasena", authBox);
     submitPasswordButton->setMinimumHeight(34);
+    authLayout->addRow("2FA", submitPasswordButton);
+    loginLayout->addWidget(authBox);
+
+    auto *sessionBox = new QGroupBox("Estado y control de sesion", loginBox);
+    auto *sessionBoxLayout = new QFormLayout(sessionBox);
+    sessionBoxLayout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+    sessionBoxLayout->setLabelAlignment(Qt::AlignLeft | Qt::AlignTop);
+    sessionBoxLayout->setFormAlignment(Qt::AlignTop);
+    sessionBoxLayout->setHorizontalSpacing(14);
+    sessionBoxLayout->setVerticalSpacing(10);
+
+    auto *sessionControlLayout = new QHBoxLayout();
+    sessionControlLayout->setSpacing(10);
+    auto *logoutButton = new QPushButton("Cerrar sesion", sessionBox);
+    auto *resetSessionButton = new QPushButton("Reiniciar sesion", sessionBox);
     logoutButton->setMinimumHeight(34);
     resetSessionButton->setMinimumHeight(34);
-    securityActionsLayout->addWidget(submitPasswordButton);
-    securityActionsLayout->addWidget(logoutButton);
-    securityActionsLayout->addWidget(resetSessionButton);
-    loginLayout->addRow("Control", securityActionsLayout);
+    sessionControlLayout->addWidget(logoutButton);
+    sessionControlLayout->addWidget(resetSessionButton);
+    sessionBoxLayout->addRow("Control", sessionControlLayout);
 
     auto *authStateLabel = buildInfoPanel(
         "font-weight: 600; background: #f6f6f6; border: 1px solid #dddddd; border-radius: 8px;",
-        loginBox);
-    loginLayout->addRow("Estado", authStateLabel);
+        sessionBox);
+    sessionBoxLayout->addRow("Estado", authStateLabel);
 
     auto *diagnosticLabel = buildInfoPanel(
         "background: #fff8e8; border: 1px solid #ecd9a5; border-radius: 8px;",
-        loginBox);
+        sessionBox);
     diagnosticLabel->setMinimumHeight(92);
-    loginLayout->addRow("Diagnostico", diagnosticLabel);
+    sessionBoxLayout->addRow("Diagnostico", diagnosticLabel);
+    loginLayout->addWidget(sessionBox);
 
     leftColumn->addWidget(loginBox);
 
-    auto *profilesBox = new QGroupBox("Perfiles locales", central);
+    auto *profilesBox = new QGroupBox("Perfiles locales", content);
     auto *profilesLayout = new QVBoxLayout(profilesBox);
     profilesLayout->setContentsMargins(14, 16, 14, 14);
     profilesLayout->setSpacing(10);
@@ -221,7 +275,7 @@ MainWindow::MainWindow(SessionManager &sessionManager,
 
     rightColumn->addWidget(profilesBox, 1);
 
-    auto *notesBox = new QGroupBox("Siguiente integracion real", central);
+    auto *notesBox = new QGroupBox("Siguiente integracion real", content);
     auto *notesLayout = new QVBoxLayout(notesBox);
     notesLayout->setContentsMargins(14, 16, 14, 14);
     auto *notes = new QLabel(
@@ -234,7 +288,7 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     notesLayout->addWidget(notes);
     rightColumn->addWidget(notesBox);
 
-    auto *separator = new QFrame(central);
+    auto *separator = new QFrame(content);
     separator->setFrameShape(QFrame::HLine);
     rootLayout->addWidget(separator);
 
@@ -242,7 +296,7 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     bottomLayout->setSpacing(18);
     rootLayout->addLayout(bottomLayout, 1);
 
-    auto *telegramDataBox = new QGroupBox("Lectura desde TDLib", central);
+    auto *telegramDataBox = new QGroupBox("Lectura desde TDLib", content);
     auto *telegramDataLayout = new QVBoxLayout(telegramDataBox);
     telegramDataLayout->setContentsMargins(14, 16, 14, 14);
     telegramDataLayout->setSpacing(10);
@@ -254,7 +308,7 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     telegramDataLayout->addWidget(chatList);
     bottomLayout->addWidget(telegramDataBox, 3);
 
-    auto *modulesBox = new QGroupBox("Estado de modulos", central);
+    auto *modulesBox = new QGroupBox("Estado de modulos", content);
     auto *modulesGrid = new QGridLayout(modulesBox);
     modulesGrid->setContentsMargins(14, 16, 14, 14);
     modulesGrid->setHorizontalSpacing(12);
@@ -292,36 +346,76 @@ MainWindow::MainWindow(SessionManager &sessionManager,
         switch (tdLibAdapter_.authorizationState()) {
             case AuthorizationState::NotInitialized:
             case AuthorizationState::WaitingParameters:
-                currentStep = "Paso 1 de 5: completar credenciales base";
-                guideText = "Ahora: credenciales  |  Siguiente: telefono  |  Luego: codigo y contrasena si aplica";
+                currentStep = "Fase 1 de 5: preparar credenciales y perfiles";
+                guideText =
+                    "Te toca probar la Fase 1:\n"
+                    "1. Llena API ID y API Hash.\n"
+                    "2. Verifica que Iniciar flujo se habilite.\n"
+                    "3. Guarda un perfil, cargalo y eliminalo.\n"
+                    "4. Inicia el flujo y confirma que el siguiente paso sea telefono.";
                 break;
             case AuthorizationState::WaitingPhoneNumber:
-                currentStep = "Paso 2 de 5: enviar telefono";
-                guideText = "Completado: credenciales  |  Ahora: telefono  |  Siguiente: codigo";
+                currentStep = "Fase 2 de 5: enviar telefono";
+                guideText =
+                    "Te toca probar la Fase 2:\n"
+                    "1. Captura o corrige el telefono.\n"
+                    "2. Pulsa Enviar telefono.\n"
+                    "3. Verifica que el estado cambie a codigo.\n"
+                    "4. Confirma que el panel Telegram refleje el nuevo estado.";
                 break;
             case AuthorizationState::WaitingCode:
-                currentStep = "Paso 3 de 5: validar codigo";
-                guideText = "Completado: credenciales y telefono  |  Ahora: codigo  |  Siguiente: acceso o 2FA";
+                currentStep = "Fase 3 de 5: validar codigo";
+                guideText =
+                    "Te toca probar la Fase 3:\n"
+                    "1. Introduce el codigo recibido.\n"
+                    "2. Pulsa Enviar codigo.\n"
+                    "3. Verifica si avanza a listo o a contrasena 2FA.\n"
+                    "4. Revisa que el diagnostico explique el resultado.";
                 break;
             case AuthorizationState::WaitingPassword:
-                currentStep = "Paso 4 de 5: validar contrasena 2FA";
-                guideText = "Completado: credenciales, telefono y codigo  |  Ahora: contrasena 2FA";
+                currentStep = "Fase 4 de 5: validar contrasena 2FA";
+                guideText =
+                    "Te toca probar la Fase 4:\n"
+                    "1. Escribe la contrasena 2FA.\n"
+                    "2. Pulsa Enviar contrasena.\n"
+                    "3. Verifica que la sesion quede lista.\n"
+                    "4. Si falla, confirma que el diagnostico sea claro.";
                 break;
             case AuthorizationState::WaitingOtherDeviceConfirmation:
-                currentStep = "Paso 4 de 5: confirmar desde otro dispositivo";
-                guideText = "Telegram esta esperando aprobacion desde una sesion ya autenticada.";
+                currentStep = "Fase 4 de 5: confirmar desde otro dispositivo";
+                guideText =
+                    "Te toca probar la Fase 4:\n"
+                    "1. Aprueba el acceso desde otro dispositivo autenticado.\n"
+                    "2. Espera el cambio a sesion lista.\n"
+                    "3. Confirma que cuenta y chats se carguen.\n"
+                    "4. Revisa el panel Telegram y el de modulos.";
                 break;
             case AuthorizationState::Ready:
-                currentStep = "Paso 5 de 5: sesion lista";
-                guideText = "Sesion activa. Ya puedes reutilizar la cuenta, cerrar sesion o reiniciar el flujo.";
+                currentStep = "Fase 5 de 5: validar sesion operativa";
+                guideText =
+                    "Te toca probar la Fase 5:\n"
+                    "1. Confirma que aparezcan cuenta y chats.\n"
+                    "2. Verifica que el panel de modulos se actualice.\n"
+                    "3. Prueba guardar, cargar y eliminar perfiles.\n"
+                    "4. Ejecuta Cerrar sesion y luego Reiniciar sesion.";
                 break;
             case AuthorizationState::MissingDependency:
                 currentStep = "TDLib no disponible";
-                guideText = "La interfaz sigue disponible, pero el backend real de Telegram no esta cargado.";
+                guideText =
+                    "Te toca validar la interfaz sin backend:\n"
+                    "1. Revisa el layout y la distribucion de controles.\n"
+                    "2. Valida guardar, cargar y eliminar perfiles.\n"
+                    "3. Confirma que los botones se habiliten o deshabiliten bien.\n"
+                    "4. Revisa el panel de modulos y diagnostico.";
                 break;
             case AuthorizationState::Failed:
                 currentStep = "Flujo interrumpido";
-                guideText = "Revisa el diagnostico y reinicia el paso correspondiente.";
+                guideText =
+                    "Te toca corregir y repetir la fase actual:\n"
+                    "1. Lee el diagnostico.\n"
+                    "2. Corrige el dato del paso actual.\n"
+                    "3. Repite solo la accion indicada.\n"
+                    "4. Si persiste, prueba Reiniciar sesion.";
                 break;
         }
 
@@ -329,6 +423,172 @@ MainWindow::MainWindow(SessionManager &sessionManager,
         stepGuideLabel->setText(guideText);
         authStateLabel->setText(tdLibAdapter_.authorizationStateLabel());
         diagnosticLabel->setText(tdLibAdapter_.diagnosticMessage());
+    };
+
+    auto updatePhaseGuide = [this, phaseSelector, phaseChecklistLabel]() {
+        const AuthorizationState state = tdLibAdapter_.authorizationState();
+
+        const auto recommendedPhase = [state]() -> int {
+            switch (state) {
+                case AuthorizationState::NotInitialized:
+                case AuthorizationState::WaitingParameters:
+                case AuthorizationState::MissingDependency:
+                case AuthorizationState::Failed:
+                    return 0;
+                case AuthorizationState::WaitingPhoneNumber:
+                    return 1;
+                case AuthorizationState::WaitingCode:
+                    return 2;
+                case AuthorizationState::WaitingPassword:
+                case AuthorizationState::WaitingOtherDeviceConfirmation:
+                    return 3;
+                case AuthorizationState::Ready:
+                    return 4;
+            }
+
+            return 0;
+        }();
+
+        const auto phaseStatus = [state](int phaseIndex) -> QString {
+            const int currentPhase = [&]() -> int {
+                switch (state) {
+                    case AuthorizationState::NotInitialized:
+                    case AuthorizationState::WaitingParameters:
+                    case AuthorizationState::MissingDependency:
+                    case AuthorizationState::Failed:
+                        return 0;
+                    case AuthorizationState::WaitingPhoneNumber:
+                        return 1;
+                    case AuthorizationState::WaitingCode:
+                        return 2;
+                    case AuthorizationState::WaitingPassword:
+                    case AuthorizationState::WaitingOtherDeviceConfirmation:
+                        return 3;
+                    case AuthorizationState::Ready:
+                        return 4;
+                }
+
+                return 0;
+            }();
+
+            if (state == AuthorizationState::Failed && phaseIndex == currentPhase) {
+                return "error";
+            }
+            if (phaseIndex < currentPhase) {
+                return "realizado";
+            }
+            if (phaseIndex == currentPhase) {
+                return state == AuthorizationState::Ready && phaseIndex == 4 ? "realizado" : "en proceso";
+            }
+            return "pendiente";
+        };
+
+        const QStringList phaseNames = {
+            "Fase 1 - Preparar credenciales y perfiles",
+            "Fase 2 - Enviar telefono",
+            "Fase 3 - Validar codigo",
+            "Fase 4 - Validar contrasena o confirmacion",
+            "Fase 5 - Revisar sesion operativa",
+            "Fase 6 - Multi-cuenta real",
+            "Fase 7 - Mensajeria y archivos",
+            "Fase 8 - Llamadas y dispositivos",
+            "Fase 9 - Analitica y auditoria",
+        };
+
+        const int previousSelection = phaseSelector->currentIndex();
+        phaseSelector->blockSignals(true);
+        phaseSelector->clear();
+        for (int index = 0; index < phaseNames.size(); ++index) {
+            phaseSelector->addItem(QString("%1 [%2]").arg(phaseNames[index], phaseStatus(index)));
+        }
+        phaseSelector->setCurrentIndex(previousSelection >= 0 ? previousSelection : recommendedPhase);
+        if (phaseSelector->currentIndex() < 0) {
+            phaseSelector->setCurrentIndex(recommendedPhase);
+        }
+        phaseSelector->blockSignals(false);
+
+        const int selectedPhase = phaseSelector->currentIndex() >= 0 ? phaseSelector->currentIndex() : recommendedPhase;
+        QString checklist;
+        switch (selectedPhase) {
+            case 0:
+                checklist =
+                    "Pruebas de la Fase 1:\n"
+                    "1. Llena API ID y API Hash.\n"
+                    "2. Verifica que Iniciar flujo se habilite.\n"
+                    "3. Guarda un perfil.\n"
+                    "4. Carga el perfil guardado.\n"
+                    "5. Elimina el perfil y confirma que desaparezca.";
+                break;
+            case 1:
+                checklist =
+                    "Pruebas de la Fase 2:\n"
+                    "1. Escribe o corrige el telefono.\n"
+                    "2. Pulsa Enviar telefono.\n"
+                    "3. Verifica que el estado cambie a codigo.\n"
+                    "4. Revisa que el panel Telegram refleje el avance.";
+                break;
+            case 2:
+                checklist =
+                    "Pruebas de la Fase 3:\n"
+                    "1. Introduce el codigo recibido.\n"
+                    "2. Pulsa Enviar codigo.\n"
+                    "3. Verifica si avanza a listo o a Fase 4.\n"
+                    "4. Confirma que el diagnostico explique el resultado.";
+                break;
+            case 3:
+                checklist =
+                    "Pruebas de la Fase 4:\n"
+                    "1. Si aplica 2FA, escribe la contrasena y enviala.\n"
+                    "2. Si aplica confirmacion externa, apruebala desde otro dispositivo.\n"
+                    "3. Verifica que el flujo avance a sesion lista.\n"
+                    "4. Revisa diagnostico y panel Telegram.";
+                break;
+            case 4:
+                checklist =
+                    "Pruebas de la Fase 5:\n"
+                    "1. Confirma que aparezcan cuenta y chats.\n"
+                    "2. Verifica que el panel de modulos se actualice.\n"
+                    "3. Prueba Cerrar sesion.\n"
+                    "4. Prueba Reiniciar sesion.\n"
+                    "5. Confirma que la UI siga consistente tras esos cambios.";
+                break;
+            case 5:
+                checklist =
+                    "Fase futura 6 - Multi-cuenta real:\n"
+                    "1. Persistir varias sesiones activas.\n"
+                    "2. Cambiar de cuenta sin rehacer login completo.\n"
+                    "3. Reflejar sesion activa en UI y paneles.\n"
+                    "Estado actual: pendiente.";
+                break;
+            case 6:
+                checklist =
+                    "Fase futura 7 - Mensajeria y archivos:\n"
+                    "1. Cargar chats principales con mas detalle.\n"
+                    "2. Enviar texto.\n"
+                    "3. Adjuntar imagen, PDF y video.\n"
+                    "Estado actual: pendiente.";
+                break;
+            case 7:
+                checklist =
+                    "Fase futura 8 - Llamadas y dispositivos:\n"
+                    "1. Integrar llamadas 1 a 1 y group call.\n"
+                    "2. Detectar y seleccionar dispositivos.\n"
+                    "3. Manejar llamada entrante durante llamada activa.\n"
+                    "Estado actual: pendiente.";
+                break;
+            case 8:
+                checklist =
+                    "Fase futura 9 - Analitica y auditoria:\n"
+                    "1. Persistir eventos en SQLite.\n"
+                    "2. Separar base analitica de la operativa.\n"
+                    "3. Mostrar auditoria basica.\n"
+                    "Estado actual: pendiente.";
+                break;
+            default:
+                break;
+        }
+
+        phaseChecklistLabel->setText(checklist);
     };
 
     auto updateAuthControls =
@@ -441,6 +701,7 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     updateTelegramDataUi();
     refreshProfilesUi();
     updateAuthControls();
+    updatePhaseGuide();
     updateModuleStatus();
 
     connect(submitButton, &QPushButton::clicked, this, [this, apiIdInput, apiHashInput, phoneInput]() {
@@ -529,9 +790,11 @@ MainWindow::MainWindow(SessionManager &sessionManager,
 
     connect(&tdLibAdapter_, &TDLibAdapter::stateChanged, this, updateTelegramUi);
     connect(&tdLibAdapter_, &TDLibAdapter::stateChanged, this, updateAuthControls);
+    connect(&tdLibAdapter_, &TDLibAdapter::stateChanged, this, updatePhaseGuide);
     connect(&tdLibAdapter_, &TDLibAdapter::stateChanged, this, updateModuleStatus);
     connect(&tdLibAdapter_, &TDLibAdapter::dataChanged, this, updateTelegramDataUi);
     connect(&tdLibAdapter_, &TDLibAdapter::dataChanged, this, updateModuleStatus);
+    connect(phaseSelector, &QComboBox::currentIndexChanged, this, updatePhaseGuide);
     connect(apiIdInput, &QLineEdit::textChanged, this, updateAuthControls);
     connect(apiHashInput, &QLineEdit::textChanged, this, updateAuthControls);
     connect(phoneInput, &QLineEdit::textChanged, this, updateAuthControls);
@@ -552,7 +815,8 @@ MainWindow::MainWindow(SessionManager &sessionManager,
         });
     }
 
-    setCentralWidget(central);
+    scrollArea->setWidget(content);
+    setCentralWidget(scrollArea);
 }
 
 }  // namespace mtc
