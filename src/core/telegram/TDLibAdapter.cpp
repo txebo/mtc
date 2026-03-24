@@ -154,6 +154,34 @@ void TDLibAdapter::submitAuthenticationPassword(const QString &password) {
                           "Contrasena enviada a TDLib. Esperando confirmacion de autenticacion.");
 }
 
+void TDLibAdapter::logout() {
+    if (!tdLibAvailable_) {
+        setAuthorizationState(AuthorizationState::MissingDependency,
+                              "No se puede cerrar sesion porque TDLib no esta presente en el sistema.");
+        return;
+    }
+
+    sendRequest("{\"@type\":\"logOut\"}");
+    initialDataRequested_ = false;
+    setAuthorizationState(AuthorizationState::WaitingParameters,
+                          "Solicitud de cierre de sesion enviada. Esperando confirmacion de TDLib.");
+}
+
+void TDLibAdapter::resetSession() {
+    if (!tdLibAvailable_) {
+        setAuthorizationState(AuthorizationState::MissingDependency,
+                              "No se puede reiniciar la sesion porque TDLib no esta presente en el sistema.");
+        return;
+    }
+
+    sendRequest("{\"@type\":\"close\"}");
+    clearSessionData();
+    initialDataRequested_ = false;
+    tdlibParametersSent_ = false;
+    setAuthorizationState(AuthorizationState::NotInitialized,
+                          "Solicitud de reinicio enviada. Vuelve a iniciar el flujo cuando TDLib cierre la sesion actual.");
+}
+
 void TDLibAdapter::sendRequest(const std::string &request) {
 #if defined(MTC_HAS_TDLIB)
     if (tdJsonClient_ != nullptr) {
@@ -218,10 +246,11 @@ void TDLibAdapter::handleResponse(const char *response) {
     }
 
     if (payload.contains("\"authorizationStateClosed\"")) {
-        tdLibAvailable_ = false;
+        clearSessionData();
         tdlibParametersSent_ = false;
-        setAuthorizationState(AuthorizationState::Failed,
-                              "TDLib cerro la sesion. Revisa logs y vuelve a inicializar el cliente.");
+        initialDataRequested_ = false;
+        setAuthorizationState(AuthorizationState::NotInitialized,
+                              "TDLib cerro la sesion actual. Puedes iniciar un nuevo flujo de autenticacion.");
         return;
     }
 
@@ -285,6 +314,12 @@ void TDLibAdapter::handleResponse(const char *response) {
             emit dataChanged();
         }
     }
+}
+
+void TDLibAdapter::clearSessionData() {
+    selfDisplayName_.clear();
+    chatTitlesById_.clear();
+    emit dataChanged();
 }
 
 void TDLibAdapter::requestInitialData() {

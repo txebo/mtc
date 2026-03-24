@@ -114,10 +114,16 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     accountActionsLayout->setSpacing(10);
     auto *submitButton = new QPushButton("Iniciar flujo", loginBox);
     auto *saveProfileButton = new QPushButton("Guardar perfil", loginBox);
+    auto *logoutButton = new QPushButton("Cerrar sesion", loginBox);
+    auto *resetSessionButton = new QPushButton("Reiniciar sesion", loginBox);
     submitButton->setMinimumHeight(34);
     saveProfileButton->setMinimumHeight(34);
+    logoutButton->setMinimumHeight(34);
+    resetSessionButton->setMinimumHeight(34);
     accountActionsLayout->addWidget(submitButton);
     accountActionsLayout->addWidget(saveProfileButton);
+    accountActionsLayout->addWidget(logoutButton);
+    accountActionsLayout->addWidget(resetSessionButton);
     loginLayout->addRow("Acciones", accountActionsLayout);
 
     auto *codeInput = new QLineEdit(loginBox);
@@ -322,6 +328,14 @@ MainWindow::MainWindow(SessionManager &sessionManager,
                                             phoneInput->text());
                 refreshProfilesUi();
             });
+
+    connect(logoutButton, &QPushButton::clicked, this, [this]() {
+        tdLibAdapter_.logout();
+    });
+
+    connect(resetSessionButton, &QPushButton::clicked, this, [this]() {
+        tdLibAdapter_.resetSession();
+    });
 
     connect(submitCodeButton, &QPushButton::clicked, this, [this, codeInput]() {
         tdLibAdapter_.submitAuthenticationCode(codeInput->text());

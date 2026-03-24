@@ -37,6 +37,8 @@ public:
                          const QString &phoneNumber);
     void submitAuthenticationCode(const QString &code);
     void submitAuthenticationPassword(const QString &password);
+    void logout();
+    void resetSession();
 
     bool isTdLibAvailable() const;
     AuthorizationState authorizationState() const;
@@ -54,6 +56,7 @@ private:
     void sendRequest(const std::string &request);
     void pollResponses();
     void handleResponse(const char *response);
+    void clearSessionData();
     void requestInitialData();
     void submitTdlibParameters();
     QString extractTdLibErrorMessage(const QJsonObject &object) const;
