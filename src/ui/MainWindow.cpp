@@ -7,6 +7,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QListWidgetItem>
 #include <QProcessEnvironment>
 #include <QPushButton>
 #include <QString>
@@ -72,6 +73,10 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     auto *loginBox = new QGroupBox("Bootstrap de TDLib", central);
     auto *loginLayout = new QFormLayout(loginBox);
 
+    auto *profileNameInput = new QLineEdit(loginBox);
+    profileNameInput->setPlaceholderText("Cuenta principal");
+    loginLayout->addRow("Alias", profileNameInput);
+
     auto *apiIdInput = new QLineEdit(loginBox);
     apiIdInput->setPlaceholderText("api_id");
     apiIdInput->setText(QProcessEnvironment::systemEnvironment().value("MTC_TDLIB_API_ID"));
@@ -91,6 +96,9 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     auto *submitButton = new QPushButton("Iniciar flujo", loginBox);
     loginLayout->addRow(submitButton);
 
+    auto *saveProfileButton = new QPushButton("Guardar perfil", loginBox);
+    loginLayout->addRow(saveProfileButton);
+
     auto *codeInput = new QLineEdit(loginBox);
     codeInput->setPlaceholderText("12345");
     codeInput->setText(QProcessEnvironment::systemEnvironment().value("MTC_TDLIB_CODE"));
@@ -109,6 +117,30 @@ MainWindow::MainWindow(SessionManager &sessionManager,
 
     topGrid->addWidget(loginBox, 0, 0);
 
+    auto *profilesBox = new QGroupBox("Perfiles locales", central);
+    auto *profilesLayout = new QVBoxLayout(profilesBox);
+    auto *profilesHint = new QLabel(
+        "Guarda credenciales base por cuenta para retomar el bootstrap sin depender de variables de entorno.",
+        profilesBox);
+    profilesHint->setWordWrap(true);
+    profilesLayout->addWidget(profilesHint);
+
+    auto *profilesList = new QListWidget(profilesBox);
+    profilesLayout->addWidget(profilesList);
+
+    auto *profilesActionsLayout = new QHBoxLayout();
+    auto *loadProfileButton = new QPushButton("Cargar perfil", profilesBox);
+    auto *removeProfileButton = new QPushButton("Eliminar perfil", profilesBox);
+    profilesActionsLayout->addWidget(loadProfileButton);
+    profilesActionsLayout->addWidget(removeProfileButton);
+    profilesLayout->addLayout(profilesActionsLayout);
+
+    auto *profilesStatusLabel = new QLabel(profilesBox);
+    profilesStatusLabel->setWordWrap(true);
+    profilesLayout->addWidget(profilesStatusLabel);
+
+    topGrid->addWidget(profilesBox, 0, 1);
+
     auto *notesBox = new QGroupBox("Siguiente integracion real", central);
     auto *notesLayout = new QVBoxLayout(notesBox);
     auto *notes = new QLabel(
@@ -119,7 +151,7 @@ MainWindow::MainWindow(SessionManager &sessionManager,
         notesBox);
     notes->setWordWrap(true);
     notesLayout->addWidget(notes);
-    topGrid->addWidget(notesBox, 0, 1);
+    topGrid->addWidget(notesBox, 1, 0, 1, 2);
 
     auto *separator = new QFrame(central);
     separator->setFrameShape(QFrame::HLine);
@@ -170,6 +202,39 @@ MainWindow::MainWindow(SessionManager &sessionManager,
         diagnosticLabel->setText(tdLibAdapter_.diagnosticMessage());
     };
 
+    auto refreshProfilesUi =
+        [profilesList, profilesStatusLabel, this]() {
+            profilesList->clear();
+
+            const QList<SessionProfile> profiles = sessionManager_.profiles();
+            if (profiles.isEmpty()) {
+                profilesList->addItem("No hay perfiles guardados todavia.");
+                profilesList->setEnabled(false);
+                profilesStatusLabel->setText("Estado: sin perfiles locales.");
+                return;
+            }
+
+            profilesList->setEnabled(true);
+            for (const SessionProfile &profile : profiles) {
+                QString title = profile.displayName.trimmed();
+                if (title.isEmpty()) {
+                    title = profile.phoneNumber.trimmed();
+                }
+                if (title.isEmpty()) {
+                    title = "Perfil sin nombre";
+                }
+
+                const QString detail = profile.phoneNumber.trimmed().isEmpty()
+                                           ? "sin telefono"
+                                           : profile.phoneNumber.trimmed();
+                auto *item = new QListWidgetItem(QString("%1 (%2)").arg(title, detail), profilesList);
+                item->setData(Qt::UserRole, profile.id);
+            }
+
+            profilesStatusLabel->setText(
+                QString::fromStdString(sessionManager_.status()));
+        };
+
     auto updateTelegramDataUi = [accountLabel, chatList, this]() {
         const QString selfDisplayName = tdLibAdapter_.selfDisplayName();
         accountLabel->setText(selfDisplayName.isEmpty()
@@ -190,6 +255,7 @@ MainWindow::MainWindow(SessionManager &sessionManager,
 
     updateTelegramUi();
     updateTelegramDataUi();
+    refreshProfilesUi();
 
     connect(submitButton, &QPushButton::clicked, this, [this, apiIdInput, apiHashInput, phoneInput]() {
         tdLibAdapter_.submitBootstrap(apiIdInput->text(),
@@ -197,9 +263,65 @@ MainWindow::MainWindow(SessionManager &sessionManager,
                                       phoneInput->text());
     });
 
+    connect(saveProfileButton,
+            &QPushButton::clicked,
+            this,
+            [this, profileNameInput, apiIdInput, apiHashInput, phoneInput, refreshProfilesUi]() {
+                sessionManager_.saveProfile(profileNameInput->text(),
+                                            apiIdInput->text(),
+                                            apiHashInput->text(),
+                                            phoneInput->text());
+                refreshProfilesUi();
+            });
+
     connect(submitCodeButton, &QPushButton::clicked, this, [this, codeInput]() {
         tdLibAdapter_.submitAuthenticationCode(codeInput->text());
     });
+
+    connect(loadProfileButton,
+            &QPushButton::clicked,
+            this,
+            [this, profilesList, profileNameInput, apiIdInput, apiHashInput, phoneInput]() {
+                QListWidgetItem *item = profilesList->currentItem();
+                if (item == nullptr) {
+                    return;
+                }
+
+                const auto profile =
+                    sessionManager_.findProfile(item->data(Qt::UserRole).toString());
+                if (!profile.has_value()) {
+                    return;
+                }
+
+                profileNameInput->setText(profile->displayName);
+                apiIdInput->setText(profile->apiId);
+                apiHashInput->setText(profile->apiHash);
+                phoneInput->setText(profile->phoneNumber);
+            });
+
+    connect(removeProfileButton,
+            &QPushButton::clicked,
+            this,
+            [this, profilesList, profileNameInput, apiIdInput, apiHashInput, phoneInput, refreshProfilesUi]() {
+                QListWidgetItem *item = profilesList->currentItem();
+                if (item == nullptr) {
+                    return;
+                }
+
+                const QString profileId = item->data(Qt::UserRole).toString();
+                if (profileId.isEmpty()) {
+                    return;
+                }
+
+                sessionManager_.removeProfile(profileId);
+                if (profilesList->count() == 1) {
+                    profileNameInput->clear();
+                    apiIdInput->clear();
+                    apiHashInput->clear();
+                    phoneInput->clear();
+                }
+                refreshProfilesUi();
+            });
 
     connect(&tdLibAdapter_, &TDLibAdapter::stateChanged, this, updateTelegramUi);
     connect(&tdLibAdapter_, &TDLibAdapter::dataChanged, this, updateTelegramDataUi);
