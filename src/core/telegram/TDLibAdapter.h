@@ -36,6 +36,7 @@ public:
                          const QString &apiHash,
                          const QString &phoneNumber);
     void submitAuthenticationCode(const QString &code);
+    void submitAuthenticationPassword(const QString &password);
 
     bool isTdLibAvailable() const;
     AuthorizationState authorizationState() const;

@@ -125,6 +125,35 @@ void TDLibAdapter::submitAuthenticationCode(const QString &code) {
                           "Codigo enviado a TDLib. Esperando confirmacion de autenticacion.");
 }
 
+void TDLibAdapter::submitAuthenticationPassword(const QString &password) {
+    const QString trimmedPassword = password.trimmed();
+
+    if (authorizationState_ == AuthorizationState::Ready) {
+        requestInitialData();
+        setAuthorizationState(AuthorizationState::Ready,
+                              "La sesion actual ya estaba autenticada. No hace falta reenviar la contrasena.");
+        return;
+    }
+
+    if (!tdLibAvailable_) {
+        setAuthorizationState(AuthorizationState::MissingDependency,
+                              "No se puede validar la contrasena porque TDLib no esta presente en el sistema.");
+        return;
+    }
+
+    if (trimmedPassword.isEmpty()) {
+        setAuthorizationState(AuthorizationState::WaitingPassword,
+                              "Falta capturar la contrasena de verificacion en dos pasos.");
+        return;
+    }
+
+    sendRequest(std::string("{\"@type\":\"checkAuthenticationPassword\",\"password\":\"")
+                + trimmedPassword.toStdString()
+                + "\"}");
+    setAuthorizationState(AuthorizationState::WaitingPassword,
+                          "Contrasena enviada a TDLib. Esperando confirmacion de autenticacion.");
+}
+
 void TDLibAdapter::sendRequest(const std::string &request) {
 #if defined(MTC_HAS_TDLIB)
     if (tdJsonClient_ != nullptr) {

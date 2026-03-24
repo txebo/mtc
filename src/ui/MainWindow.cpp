@@ -129,6 +129,15 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     submitCodeButton->setMinimumHeight(34);
     loginLayout->addRow("Validacion", submitCodeButton);
 
+    auto *passwordInput = new QLineEdit(loginBox);
+    passwordInput->setPlaceholderText("Contrasena 2FA");
+    passwordInput->setEchoMode(QLineEdit::Password);
+    loginLayout->addRow("Contrasena", passwordInput);
+
+    auto *submitPasswordButton = new QPushButton("Enviar contrasena", loginBox);
+    submitPasswordButton->setMinimumHeight(34);
+    loginLayout->addRow("2FA", submitPasswordButton);
+
     auto *authStateLabel = new QLabel(loginBox);
     authStateLabel->setWordWrap(true);
     loginLayout->addRow("Estado", authStateLabel);
@@ -316,6 +325,10 @@ MainWindow::MainWindow(SessionManager &sessionManager,
 
     connect(submitCodeButton, &QPushButton::clicked, this, [this, codeInput]() {
         tdLibAdapter_.submitAuthenticationCode(codeInput->text());
+    });
+
+    connect(submitPasswordButton, &QPushButton::clicked, this, [this, passwordInput]() {
+        tdLibAdapter_.submitAuthenticationPassword(passwordInput->text());
     });
 
     connect(loadProfileButton,
