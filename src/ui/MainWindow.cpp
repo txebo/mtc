@@ -90,6 +90,18 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     loginLayout->setHorizontalSpacing(14);
     loginLayout->setVerticalSpacing(10);
 
+    auto *stepLabel = new QLabel(loginBox);
+    stepLabel->setWordWrap(true);
+    stepLabel->setStyleSheet("font-weight: 700;");
+    loginLayout->addRow("Paso actual", stepLabel);
+
+    auto *stepGuideLabel = new QLabel(
+        "1. Credenciales  2. Telefono  3. Codigo  4. Contrasena  5. Listo",
+        loginBox);
+    stepGuideLabel->setWordWrap(true);
+    stepGuideLabel->setStyleSheet("color: #666;");
+    loginLayout->addRow("Guia", stepGuideLabel);
+
     auto *profileNameInput = new QLineEdit(loginBox);
     profileNameInput->setPlaceholderText("Cuenta principal");
     loginLayout->addRow("Alias", profileNameInput);
@@ -261,10 +273,97 @@ MainWindow::MainWindow(SessionManager &sessionManager,
                            1,
                            2);
 
-    auto updateTelegramUi = [authStateLabel, diagnosticLabel, this]() {
+    auto updateTelegramUi = [authStateLabel, diagnosticLabel, stepLabel, stepGuideLabel, this]() {
+        QString currentStep;
+        QString guideText;
+
+        switch (tdLibAdapter_.authorizationState()) {
+            case AuthorizationState::NotInitialized:
+            case AuthorizationState::WaitingParameters:
+                currentStep = "Paso 1 de 5: completar credenciales base";
+                guideText = "Ahora: credenciales  |  Siguiente: telefono  |  Luego: codigo y contrasena si aplica";
+                break;
+            case AuthorizationState::WaitingPhoneNumber:
+                currentStep = "Paso 2 de 5: enviar telefono";
+                guideText = "Completado: credenciales  |  Ahora: telefono  |  Siguiente: codigo";
+                break;
+            case AuthorizationState::WaitingCode:
+                currentStep = "Paso 3 de 5: validar codigo";
+                guideText = "Completado: credenciales y telefono  |  Ahora: codigo  |  Siguiente: acceso o 2FA";
+                break;
+            case AuthorizationState::WaitingPassword:
+                currentStep = "Paso 4 de 5: validar contrasena 2FA";
+                guideText = "Completado: credenciales, telefono y codigo  |  Ahora: contrasena 2FA";
+                break;
+            case AuthorizationState::WaitingOtherDeviceConfirmation:
+                currentStep = "Paso 4 de 5: confirmar desde otro dispositivo";
+                guideText = "Telegram esta esperando aprobacion desde una sesion ya autenticada.";
+                break;
+            case AuthorizationState::Ready:
+                currentStep = "Paso 5 de 5: sesion lista";
+                guideText = "Sesion activa. Ya puedes reutilizar la cuenta, cerrar sesion o reiniciar el flujo.";
+                break;
+            case AuthorizationState::MissingDependency:
+                currentStep = "TDLib no disponible";
+                guideText = "La interfaz sigue disponible, pero el backend real de Telegram no esta cargado.";
+                break;
+            case AuthorizationState::Failed:
+                currentStep = "Flujo interrumpido";
+                guideText = "Revisa el diagnostico y reinicia el paso correspondiente.";
+                break;
+        }
+
+        stepLabel->setText(currentStep);
+        stepGuideLabel->setText(guideText);
         authStateLabel->setText(tdLibAdapter_.authorizationStateLabel());
         diagnosticLabel->setText(tdLibAdapter_.diagnosticMessage());
     };
+
+    auto updateAuthControls =
+        [this,
+         apiIdInput,
+         apiHashInput,
+         phoneInput,
+         codeInput,
+         passwordInput,
+         submitButton,
+         saveProfileButton,
+         sendPhoneButton,
+         submitCodeButton,
+         submitPasswordButton,
+         logoutButton,
+         resetSessionButton]() {
+            const AuthorizationState state = tdLibAdapter_.authorizationState();
+            const bool hasApiCredentials =
+                !apiIdInput->text().trimmed().isEmpty() && !apiHashInput->text().trimmed().isEmpty();
+            const bool hasPhoneNumber = !phoneInput->text().trimmed().isEmpty();
+            const bool hasCode = !codeInput->text().trimmed().isEmpty();
+            const bool hasPassword = !passwordInput->text().trimmed().isEmpty();
+            const bool tdLibReadyForActions = tdLibAdapter_.isTdLibAvailable();
+            const bool sessionActive = state == AuthorizationState::Ready;
+            const bool waitingPhone = state == AuthorizationState::WaitingPhoneNumber;
+            const bool waitingCode = state == AuthorizationState::WaitingCode;
+            const bool waitingPassword = state == AuthorizationState::WaitingPassword;
+            const bool notInitialized = state == AuthorizationState::NotInitialized
+                                        || state == AuthorizationState::WaitingParameters
+                                        || state == AuthorizationState::Failed;
+
+            apiIdInput->setEnabled(!sessionActive);
+            apiHashInput->setEnabled(!sessionActive);
+            phoneInput->setEnabled(!sessionActive);
+            codeInput->setEnabled(waitingCode);
+            passwordInput->setEnabled(waitingPassword);
+
+            submitButton->setEnabled(tdLibReadyForActions && hasApiCredentials && !sessionActive);
+            saveProfileButton->setEnabled(hasApiCredentials || hasPhoneNumber);
+            sendPhoneButton->setEnabled(tdLibReadyForActions && hasApiCredentials && hasPhoneNumber
+                                        && (waitingPhone || notInitialized));
+            submitCodeButton->setEnabled(tdLibReadyForActions && waitingCode && hasCode);
+            submitPasswordButton->setEnabled(tdLibReadyForActions && waitingPassword && hasPassword);
+            logoutButton->setEnabled(tdLibReadyForActions && sessionActive);
+            resetSessionButton->setEnabled(tdLibReadyForActions
+                                           && state != AuthorizationState::MissingDependency);
+        };
 
     auto refreshProfilesUi =
         [profilesList, profilesStatusLabel, this]() {
@@ -320,6 +419,7 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     updateTelegramUi();
     updateTelegramDataUi();
     refreshProfilesUi();
+    updateAuthControls();
 
     connect(submitButton, &QPushButton::clicked, this, [this, apiIdInput, apiHashInput, phoneInput]() {
         tdLibAdapter_.submitBootstrap(apiIdInput->text(),
@@ -404,7 +504,13 @@ MainWindow::MainWindow(SessionManager &sessionManager,
             });
 
     connect(&tdLibAdapter_, &TDLibAdapter::stateChanged, this, updateTelegramUi);
+    connect(&tdLibAdapter_, &TDLibAdapter::stateChanged, this, updateAuthControls);
     connect(&tdLibAdapter_, &TDLibAdapter::dataChanged, this, updateTelegramDataUi);
+    connect(apiIdInput, &QLineEdit::textChanged, this, updateAuthControls);
+    connect(apiHashInput, &QLineEdit::textChanged, this, updateAuthControls);
+    connect(phoneInput, &QLineEdit::textChanged, this, updateAuthControls);
+    connect(codeInput, &QLineEdit::textChanged, this, updateAuthControls);
+    connect(passwordInput, &QLineEdit::textChanged, this, updateAuthControls);
 
     if (!apiIdInput->text().isEmpty() && !apiHashInput->text().isEmpty()) {
         QTimer::singleShot(0, this, [this, apiIdInput, apiHashInput, phoneInput]() {
