@@ -26,15 +26,28 @@ namespace mtc {
 
 namespace {
 
-QGroupBox *buildModuleBox(const QString &title, const QString &body, QWidget *parent) {
+QGroupBox *buildModuleBox(const QString &title, QWidget *parent, QLabel **bodyLabel) {
     auto *box = new QGroupBox(title, parent);
     auto *layout = new QVBoxLayout(box);
 
-    auto *label = new QLabel(body, box);
+    auto *label = new QLabel(box);
     label->setWordWrap(true);
     layout->addWidget(label);
+    if (bodyLabel != nullptr) {
+        *bodyLabel = label;
+    }
 
     return box;
+}
+
+QLabel *buildInfoPanel(const QString &styleSheet, QWidget *parent) {
+    auto *label = new QLabel(parent);
+    label->setWordWrap(true);
+    label->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+    label->setMinimumHeight(64);
+    label->setMargin(10);
+    label->setStyleSheet(styleSheet);
+    return label;
 }
 
 }  // namespace
@@ -90,16 +103,16 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     loginLayout->setHorizontalSpacing(14);
     loginLayout->setVerticalSpacing(10);
 
-    auto *stepLabel = new QLabel(loginBox);
-    stepLabel->setWordWrap(true);
-    stepLabel->setStyleSheet("font-weight: 700;");
+    auto *stepLabel = buildInfoPanel(
+        "font-weight: 700; background: #f4f7fb; border: 1px solid #d7e0ea; border-radius: 8px;",
+        loginBox);
     loginLayout->addRow("Paso actual", stepLabel);
 
-    auto *stepGuideLabel = new QLabel(
-        "1. Credenciales  2. Telefono  3. Codigo  4. Contrasena  5. Listo",
+    auto *stepGuideLabel = buildInfoPanel(
+        "color: #4f5d6b; background: #fafbfc; border: 1px solid #dfe5eb; border-radius: 8px;",
         loginBox);
-    stepGuideLabel->setWordWrap(true);
-    stepGuideLabel->setStyleSheet("color: #666;");
+    stepGuideLabel->setMinimumHeight(72);
+    stepGuideLabel->setText("1. Credenciales  2. Telefono  3. Codigo  4. Contrasena  5. Listo");
     loginLayout->addRow("Guia", stepGuideLabel);
 
     auto *profileNameInput = new QLineEdit(loginBox);
@@ -165,12 +178,15 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     securityActionsLayout->addWidget(resetSessionButton);
     loginLayout->addRow("Control", securityActionsLayout);
 
-    auto *authStateLabel = new QLabel(loginBox);
-    authStateLabel->setWordWrap(true);
+    auto *authStateLabel = buildInfoPanel(
+        "font-weight: 600; background: #f6f6f6; border: 1px solid #dddddd; border-radius: 8px;",
+        loginBox);
     loginLayout->addRow("Estado", authStateLabel);
 
-    auto *diagnosticLabel = new QLabel(loginBox);
-    diagnosticLabel->setWordWrap(true);
+    auto *diagnosticLabel = buildInfoPanel(
+        "background: #fff8e8; border: 1px solid #ecd9a5; border-radius: 8px;",
+        loginBox);
+    diagnosticLabel->setMinimumHeight(92);
     loginLayout->addRow("Diagnostico", diagnosticLabel);
 
     leftColumn->addWidget(loginBox);
@@ -245,29 +261,25 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     modulesGrid->setVerticalSpacing(12);
     bottomLayout->addWidget(modulesBox, 2);
 
-    modulesGrid->addWidget(buildModuleBox("Sesiones",
-                                          QString::fromStdString(sessionManager_.status()),
-                                          modulesBox),
+    QLabel *sessionModuleLabel = nullptr;
+    QLabel *telegramModuleLabel = nullptr;
+    QLabel *callModuleLabel = nullptr;
+    QLabel *deviceModuleLabel = nullptr;
+    QLabel *analyticsModuleLabel = nullptr;
+
+    modulesGrid->addWidget(buildModuleBox("Sesiones", modulesBox, &sessionModuleLabel),
                            0,
                            0);
-    modulesGrid->addWidget(buildModuleBox("Telegram",
-                                          QString::fromStdString(tdLibAdapter_.status()),
-                                          modulesBox),
+    modulesGrid->addWidget(buildModuleBox("Telegram", modulesBox, &telegramModuleLabel),
                            0,
                            1);
-    modulesGrid->addWidget(buildModuleBox("Llamadas",
-                                          QString::fromStdString(callController_.status()),
-                                          modulesBox),
+    modulesGrid->addWidget(buildModuleBox("Llamadas", modulesBox, &callModuleLabel),
                            1,
                            0);
-    modulesGrid->addWidget(buildModuleBox("Dispositivos",
-                                          QString::fromStdString(deviceManager_.status()),
-                                          modulesBox),
+    modulesGrid->addWidget(buildModuleBox("Dispositivos", modulesBox, &deviceModuleLabel),
                            1,
                            1);
-    modulesGrid->addWidget(buildModuleBox("Analitica",
-                                          QString::fromStdString(analyticsStore_.status()),
-                                          modulesBox),
+    modulesGrid->addWidget(buildModuleBox("Analitica", modulesBox, &analyticsModuleLabel),
                            2,
                            0,
                            1,
@@ -398,6 +410,15 @@ MainWindow::MainWindow(SessionManager &sessionManager,
                 QString::fromStdString(sessionManager_.status()));
         };
 
+    auto updateModuleStatus =
+        [this, sessionModuleLabel, telegramModuleLabel, callModuleLabel, deviceModuleLabel, analyticsModuleLabel]() {
+            sessionModuleLabel->setText(QString::fromStdString(sessionManager_.status()));
+            telegramModuleLabel->setText(QString::fromStdString(tdLibAdapter_.status()));
+            callModuleLabel->setText(QString::fromStdString(callController_.status()));
+            deviceModuleLabel->setText(QString::fromStdString(deviceManager_.status()));
+            analyticsModuleLabel->setText(QString::fromStdString(analyticsStore_.status()));
+        };
+
     auto updateTelegramDataUi = [accountLabel, chatList, this]() {
         const QString selfDisplayName = tdLibAdapter_.selfDisplayName();
         accountLabel->setText(selfDisplayName.isEmpty()
@@ -420,6 +441,7 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     updateTelegramDataUi();
     refreshProfilesUi();
     updateAuthControls();
+    updateModuleStatus();
 
     connect(submitButton, &QPushButton::clicked, this, [this, apiIdInput, apiHashInput, phoneInput]() {
         tdLibAdapter_.submitBootstrap(apiIdInput->text(),
@@ -430,12 +452,13 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     connect(saveProfileButton,
             &QPushButton::clicked,
             this,
-            [this, profileNameInput, apiIdInput, apiHashInput, phoneInput, refreshProfilesUi]() {
+            [this, profileNameInput, apiIdInput, apiHashInput, phoneInput, refreshProfilesUi, updateModuleStatus]() {
                 sessionManager_.saveProfile(profileNameInput->text(),
                                             apiIdInput->text(),
                                             apiHashInput->text(),
                                             phoneInput->text());
                 refreshProfilesUi();
+                updateModuleStatus();
             });
 
     connect(sendPhoneButton, &QPushButton::clicked, this, [this, phoneInput]() {
@@ -482,7 +505,7 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     connect(removeProfileButton,
             &QPushButton::clicked,
             this,
-            [this, profilesList, profileNameInput, apiIdInput, apiHashInput, phoneInput, refreshProfilesUi]() {
+            [this, profilesList, profileNameInput, apiIdInput, apiHashInput, phoneInput, refreshProfilesUi, updateModuleStatus]() {
                 QListWidgetItem *item = profilesList->currentItem();
                 if (item == nullptr) {
                     return;
@@ -501,11 +524,14 @@ MainWindow::MainWindow(SessionManager &sessionManager,
                     phoneInput->clear();
                 }
                 refreshProfilesUi();
+                updateModuleStatus();
             });
 
     connect(&tdLibAdapter_, &TDLibAdapter::stateChanged, this, updateTelegramUi);
     connect(&tdLibAdapter_, &TDLibAdapter::stateChanged, this, updateAuthControls);
+    connect(&tdLibAdapter_, &TDLibAdapter::stateChanged, this, updateModuleStatus);
     connect(&tdLibAdapter_, &TDLibAdapter::dataChanged, this, updateTelegramDataUi);
+    connect(&tdLibAdapter_, &TDLibAdapter::dataChanged, this, updateModuleStatus);
     connect(apiIdInput, &QLineEdit::textChanged, this, updateAuthControls);
     connect(apiHashInput, &QLineEdit::textChanged, this, updateAuthControls);
     connect(phoneInput, &QLineEdit::textChanged, this, updateAuthControls);
