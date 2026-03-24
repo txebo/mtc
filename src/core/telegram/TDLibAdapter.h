@@ -35,6 +35,7 @@ public:
     void submitBootstrap(const QString &apiId,
                          const QString &apiHash,
                          const QString &phoneNumber);
+    void submitPhoneNumber(const QString &phoneNumber);
     void submitAuthenticationCode(const QString &code);
     void submitAuthenticationPassword(const QString &password);
     void logout();

@@ -81,8 +81,39 @@ void TDLibAdapter::submitBootstrap(const QString &apiId,
         return;
     }
 
+    submitTdlibParameters();
     if (phoneNumber_.isEmpty()) {
-        submitTdlibParameters();
+        setAuthorizationState(AuthorizationState::WaitingPhoneNumber,
+                              "Falta el numero de telefono para continuar el login.");
+        return;
+    }
+
+    submitPhoneNumber(phoneNumber_);
+}
+
+void TDLibAdapter::submitPhoneNumber(const QString &phoneNumber) {
+    phoneNumber_ = phoneNumber.trimmed();
+
+    if (authorizationState_ == AuthorizationState::Ready) {
+        requestInitialData();
+        setAuthorizationState(AuthorizationState::Ready,
+                              "La sesion actual ya estaba autenticada. No hace falta reenviar el telefono.");
+        return;
+    }
+
+    if (!tdLibAvailable_) {
+        setAuthorizationState(AuthorizationState::MissingDependency,
+                              "No se puede enviar el telefono porque TDLib no esta presente en el sistema.");
+        return;
+    }
+
+    if (apiId_.isEmpty() || apiHash_.isEmpty()) {
+        setAuthorizationState(AuthorizationState::WaitingParameters,
+                              "Primero completa api_id y api_hash para preparar la sesion TDLib.");
+        return;
+    }
+
+    if (phoneNumber_.isEmpty()) {
         setAuthorizationState(AuthorizationState::WaitingPhoneNumber,
                               "Falta el numero de telefono para continuar el login.");
         return;

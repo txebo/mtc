@@ -110,39 +110,48 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     phoneInput->setText(QProcessEnvironment::systemEnvironment().value("MTC_TDLIB_PHONE"));
     loginLayout->addRow("Telefono", phoneInput);
 
-    auto *accountActionsLayout = new QHBoxLayout();
-    accountActionsLayout->setSpacing(10);
+    auto *sessionActionsLayout = new QHBoxLayout();
+    sessionActionsLayout->setSpacing(10);
     auto *submitButton = new QPushButton("Iniciar flujo", loginBox);
     auto *saveProfileButton = new QPushButton("Guardar perfil", loginBox);
-    auto *logoutButton = new QPushButton("Cerrar sesion", loginBox);
-    auto *resetSessionButton = new QPushButton("Reiniciar sesion", loginBox);
     submitButton->setMinimumHeight(34);
     saveProfileButton->setMinimumHeight(34);
-    logoutButton->setMinimumHeight(34);
-    resetSessionButton->setMinimumHeight(34);
-    accountActionsLayout->addWidget(submitButton);
-    accountActionsLayout->addWidget(saveProfileButton);
-    accountActionsLayout->addWidget(logoutButton);
-    accountActionsLayout->addWidget(resetSessionButton);
-    loginLayout->addRow("Acciones", accountActionsLayout);
+    sessionActionsLayout->addWidget(submitButton);
+    sessionActionsLayout->addWidget(saveProfileButton);
+    loginLayout->addRow("Sesion", sessionActionsLayout);
+
+    auto *phoneActionsLayout = new QHBoxLayout();
+    phoneActionsLayout->setSpacing(10);
+    auto *sendPhoneButton = new QPushButton("Enviar telefono", loginBox);
+    auto *submitCodeButton = new QPushButton("Enviar codigo", loginBox);
+    sendPhoneButton->setMinimumHeight(34);
+    submitCodeButton->setMinimumHeight(34);
+    phoneActionsLayout->addWidget(sendPhoneButton);
+    phoneActionsLayout->addWidget(submitCodeButton);
+    loginLayout->addRow("Validacion", phoneActionsLayout);
 
     auto *codeInput = new QLineEdit(loginBox);
     codeInput->setPlaceholderText("12345");
     codeInput->setText(QProcessEnvironment::systemEnvironment().value("MTC_TDLIB_CODE"));
     loginLayout->addRow("Codigo", codeInput);
 
-    auto *submitCodeButton = new QPushButton("Enviar codigo", loginBox);
-    submitCodeButton->setMinimumHeight(34);
-    loginLayout->addRow("Validacion", submitCodeButton);
-
     auto *passwordInput = new QLineEdit(loginBox);
     passwordInput->setPlaceholderText("Contrasena 2FA");
     passwordInput->setEchoMode(QLineEdit::Password);
     loginLayout->addRow("Contrasena", passwordInput);
 
+    auto *securityActionsLayout = new QHBoxLayout();
+    securityActionsLayout->setSpacing(10);
     auto *submitPasswordButton = new QPushButton("Enviar contrasena", loginBox);
+    auto *logoutButton = new QPushButton("Cerrar sesion", loginBox);
+    auto *resetSessionButton = new QPushButton("Reiniciar sesion", loginBox);
     submitPasswordButton->setMinimumHeight(34);
-    loginLayout->addRow("2FA", submitPasswordButton);
+    logoutButton->setMinimumHeight(34);
+    resetSessionButton->setMinimumHeight(34);
+    securityActionsLayout->addWidget(submitPasswordButton);
+    securityActionsLayout->addWidget(logoutButton);
+    securityActionsLayout->addWidget(resetSessionButton);
+    loginLayout->addRow("Control", securityActionsLayout);
 
     auto *authStateLabel = new QLabel(loginBox);
     authStateLabel->setWordWrap(true);
@@ -328,6 +337,10 @@ MainWindow::MainWindow(SessionManager &sessionManager,
                                             phoneInput->text());
                 refreshProfilesUi();
             });
+
+    connect(sendPhoneButton, &QPushButton::clicked, this, [this, phoneInput]() {
+        tdLibAdapter_.submitPhoneNumber(phoneInput->text());
+    });
 
     connect(logoutButton, &QPushButton::clicked, this, [this]() {
         tdLibAdapter_.logout();
