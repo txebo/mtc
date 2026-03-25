@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QDateTime>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -20,22 +21,255 @@ namespace mtc {
 
 namespace {
 
-QString messageTextFromContent(const QJsonObject &content) {
-    if (content.value("@type").toString() != "messageText") {
-        return "[Mensaje no textual]";
+QJsonObject formattedText(const QString &text) {
+    QJsonObject value;
+    value["@type"] = "formattedText";
+    value["text"] = text;
+    return value;
+}
+
+QString captionText(const QJsonObject &content) {
+    return content.value("caption").toObject().value("text").toString().trimmed();
+}
+
+QString messageSummaryFromContent(const QJsonObject &content) {
+    const QString type = content.value("@type").toString();
+
+    if (type == "messageText") {
+        const QString text = content.value("text").toObject().value("text").toString().trimmed();
+        return text.isEmpty() ? "[Texto vacio]" : text;
     }
 
-    const QJsonObject textObject = content.value("text").toObject();
-    const QString text = textObject.value("text").toString().trimmed();
-    return text.isEmpty() ? "[Texto vacio]" : text;
+    if (type == "messagePhoto") {
+        const QString caption = captionText(content);
+        return caption.isEmpty() ? "[Foto]" : QString("[Foto] %1").arg(caption);
+    }
+
+    if (type == "messageVideo") {
+        const QString fileName = content.value("video").toObject().value("file_name").toString().trimmed();
+        const QString caption = captionText(content);
+        if (!caption.isEmpty()) {
+            return QString("[Video] %1").arg(caption);
+        }
+        return fileName.isEmpty() ? "[Video]" : QString("[Video] %1").arg(fileName);
+    }
+
+    if (type == "messageDocument") {
+        const QString fileName = content.value("document").toObject().value("file_name").toString().trimmed();
+        const QString caption = captionText(content);
+        if (!caption.isEmpty()) {
+            return QString("[Documento] %1").arg(caption);
+        }
+        return fileName.isEmpty() ? "[Documento]" : QString("[Documento] %1").arg(fileName);
+    }
+
+    if (type == "messageAudio") {
+        const QJsonObject audio = content.value("audio").toObject();
+        const QString performer = audio.value("performer").toString().trimmed();
+        const QString title = audio.value("title").toString().trimmed();
+        if (!performer.isEmpty() || !title.isEmpty()) {
+            return QString("[Audio] %1 %2").arg(performer, title).trimmed();
+        }
+        return "[Audio]";
+    }
+
+    if (type == "messageVoiceNote") {
+        return "[Nota de voz]";
+    }
+
+    if (type == "messageSticker") {
+        const QString emoji = content.value("sticker").toObject().value("emoji").toString().trimmed();
+        return emoji.isEmpty() ? "[Sticker]" : QString("[Sticker] %1").arg(emoji);
+    }
+
+    if (type == "messageAnimation") {
+        const QString caption = captionText(content);
+        return caption.isEmpty() ? "[Animacion/GIF]" : QString("[Animacion/GIF] %1").arg(caption);
+    }
+
+    if (type == "messageVideoNote") {
+        return "[Video nota]";
+    }
+
+    if (type == "messageLocation") {
+        const QJsonObject location = content.value("location").toObject();
+        const double lat = location.value("latitude").toDouble();
+        const double lon = location.value("longitude").toDouble();
+        return QString("[Ubicacion] %1, %2").arg(lat, 0, 'f', 5).arg(lon, 0, 'f', 5);
+    }
+
+    if (type == "messageContact") {
+        const QJsonObject contact = content.value("contact").toObject();
+        const QString name = QString("%1 %2")
+                                 .arg(contact.value("first_name").toString().trimmed(),
+                                      contact.value("last_name").toString().trimmed())
+                                 .trimmed();
+        return name.isEmpty() ? "[Contacto]" : QString("[Contacto] %1").arg(name);
+    }
+
+    if (type == "messagePoll") {
+        const QString question = content.value("poll").toObject().value("question").toString().trimmed();
+        return question.isEmpty() ? "[Encuesta]" : QString("[Encuesta] %1").arg(question);
+    }
+
+    if (type == "messageChatChangeTitle") {
+        return QString("[Sistema] Cambio de titulo: %1").arg(content.value("title").toString().trimmed());
+    }
+
+    if (type == "messageChatAddMembers") {
+        return "[Sistema] Se agregaron miembros al chat";
+    }
+
+    if (type == "messageChatDeleteMember") {
+        return "[Sistema] Se elimino un miembro del chat";
+    }
+
+    if (type == "messageUnsupported") {
+        return "[Contenido no soportado]";
+    }
+
+    return type.isEmpty() ? "[Mensaje no textual]" : QString("[Tipo %1]").arg(type);
 }
 
 QString messageLineFromObject(const QJsonObject &messageObject) {
     const QString direction = messageObject.value("is_outgoing").toBool(false) ? "Yo" : "Chat";
     const QDateTime at = QDateTime::fromSecsSinceEpoch(messageObject.value("date").toInt(), Qt::UTC);
     const QString timeLabel = at.isValid() ? at.toLocalTime().toString("HH:mm") : "--:--";
-    const QString text = messageTextFromContent(messageObject.value("content").toObject());
+    const QString text = messageSummaryFromContent(messageObject.value("content").toObject());
     return QString("[%1] %2: %3").arg(timeLabel, direction, text);
+}
+
+qint64 jsonToInt64(const QJsonValue &value) {
+    return value.toVariant().toLongLong();
+}
+
+QString contentTypeKey(const QString &contentType) {
+    if (contentType == "messageText") {
+        return "text";
+    }
+    if (contentType == "messagePhoto") {
+        return "photo";
+    }
+    if (contentType == "messageVideo") {
+        return "video";
+    }
+    if (contentType == "messageDocument") {
+        return "document";
+    }
+    if (contentType == "messageAudio") {
+        return "audio";
+    }
+    if (contentType == "messageVoiceNote") {
+        return "voice_note";
+    }
+    if (contentType == "messageSticker") {
+        return "sticker";
+    }
+    if (contentType == "messageAnimation") {
+        return "animation";
+    }
+    if (contentType == "messageVideoNote") {
+        return "video_note";
+    }
+    if (contentType == "messageLocation") {
+        return "location";
+    }
+    if (contentType == "messageContact") {
+        return "contact";
+    }
+    if (contentType == "messagePoll") {
+        return "poll";
+    }
+    return contentType.isEmpty() ? "unknown" : contentType;
+}
+
+QJsonObject bestPhotoFileObject(const QJsonObject &photoObject) {
+    const QJsonArray sizes = photoObject.value("sizes").toArray();
+    QJsonObject bestFile;
+    qint64 bestScore = -1;
+
+    for (const QJsonValue &sizeValue : sizes) {
+        const QJsonObject sizeObject = sizeValue.toObject();
+        const QJsonObject fileObject = sizeObject.value("photo").toObject();
+        if (fileObject.isEmpty()) {
+            continue;
+        }
+
+        const qint64 width = sizeObject.value("width").toInt();
+        const qint64 height = sizeObject.value("height").toInt();
+        const qint64 score = width * height;
+        if (bestFile.isEmpty() || score >= bestScore) {
+            bestFile = fileObject;
+            bestScore = score;
+        }
+    }
+
+    return bestFile;
+}
+
+QJsonObject fileObjectFromContent(const QJsonObject &content) {
+    const QString type = content.value("@type").toString();
+    if (type == "messagePhoto") {
+        return bestPhotoFileObject(content.value("photo").toObject());
+    }
+    if (type == "messageVideo") {
+        return content.value("video").toObject().value("video").toObject();
+    }
+    if (type == "messageDocument") {
+        return content.value("document").toObject().value("document").toObject();
+    }
+    if (type == "messageAudio") {
+        return content.value("audio").toObject().value("audio").toObject();
+    }
+    if (type == "messageVoiceNote") {
+        return content.value("voice_note").toObject().value("voice").toObject();
+    }
+    if (type == "messageSticker") {
+        return content.value("sticker").toObject().value("sticker").toObject();
+    }
+    if (type == "messageAnimation") {
+        return content.value("animation").toObject().value("animation").toObject();
+    }
+    if (type == "messageVideoNote") {
+        return content.value("video_note").toObject().value("video").toObject();
+    }
+    return QJsonObject();
+}
+
+void applyFileMetadataToEntry(const QJsonObject &fileObject, ChatMessageEntry *entry) {
+    if (entry == nullptr || fileObject.isEmpty()) {
+        return;
+    }
+
+    const qint64 fileId = jsonToInt64(fileObject.value("id"));
+    if (fileId <= 0) {
+        return;
+    }
+
+    const QJsonObject localObject = fileObject.value("local").toObject();
+    const bool isDownloaded = localObject.value("is_downloading_completed").toBool(false);
+    QString localPath = localObject.value("path").toString().trimmed();
+    if (!isDownloaded) {
+        localPath.clear();
+    }
+
+    entry->fileId = fileId;
+    entry->localPath = localPath;
+    entry->canDownload = localObject.value("can_be_downloaded").toBool(false);
+    if (!entry->localPath.isEmpty()) {
+        entry->canDownload = false;
+    }
+}
+
+ChatMessageEntry chatMessageEntryFromObject(const QJsonObject &messageObject) {
+    ChatMessageEntry entry;
+    entry.messageId = jsonToInt64(messageObject.value("id"));
+    entry.line = messageLineFromObject(messageObject);
+
+    const QJsonObject content = messageObject.value("content").toObject();
+    entry.contentType = contentTypeKey(content.value("@type").toString());
+    applyFileMetadataToEntry(fileObjectFromContent(content), &entry);
+    return entry;
 }
 
 }  // namespace
@@ -592,17 +826,22 @@ void TDLibAdapter::handleResponse(const char *response) {
         const QJsonArray messages = object.value("messages").toArray();
         QString chatId = selectedChatId_;
         if (!messages.isEmpty()) {
-            chatId = QString::number(messages.first().toObject().value("chat_id").toVariant().toLongLong());
+            chatId = QString::number(jsonToInt64(messages.first().toObject().value("chat_id")));
         }
 
         if (!chatId.isEmpty() && chatId == selectedChatId_) {
             QStringList lines;
+            QList<ChatMessageEntry> entries;
             lines.reserve(messages.size());
+            entries.reserve(messages.size());
             for (int index = messages.size() - 1; index >= 0; --index) {
                 const QJsonObject messageObject = messages[index].toObject();
-                lines.append(messageLineFromObject(messageObject));
+                const ChatMessageEntry entry = chatMessageEntryFromObject(messageObject);
+                lines.append(entry.line);
+                entries.append(entry);
             }
             selectedChatMessages_ = lines;
+            selectedChatMessageEntries_ = entries;
             emit dataChanged();
         }
         return;
@@ -610,9 +849,50 @@ void TDLibAdapter::handleResponse(const char *response) {
 
     if (type == "updateNewMessage") {
         const QJsonObject messageObject = object.value("message").toObject();
-        const QString chatId = QString::number(messageObject.value("chat_id").toVariant().toLongLong());
+        const QString chatId = QString::number(jsonToInt64(messageObject.value("chat_id")));
         if (!chatId.isEmpty() && chatId == selectedChatId_) {
-            selectedChatMessages_.append(messageLineFromObject(messageObject));
+            const ChatMessageEntry entry = chatMessageEntryFromObject(messageObject);
+            selectedChatMessages_.append(entry.line);
+            selectedChatMessageEntries_.append(entry);
+            emit dataChanged();
+        }
+        return;
+    }
+
+    if (type == "file" || type == "updateFile") {
+        const QJsonObject fileObject = type == "updateFile" ? object.value("file").toObject() : object;
+        const qint64 fileId = jsonToInt64(fileObject.value("id"));
+        if (fileId <= 0) {
+            return;
+        }
+
+        const QJsonObject localObject = fileObject.value("local").toObject();
+        QString localPath = localObject.value("path").toString().trimmed();
+        if (!localObject.value("is_downloading_completed").toBool(false)) {
+            localPath.clear();
+        }
+        bool canDownload = localObject.value("can_be_downloaded").toBool(false);
+        if (!localPath.isEmpty()) {
+            canDownload = false;
+        }
+
+        bool changed = false;
+        for (ChatMessageEntry &entry : selectedChatMessageEntries_) {
+            if (entry.fileId != fileId) {
+                continue;
+            }
+
+            if (entry.localPath != localPath) {
+                entry.localPath = localPath;
+                changed = true;
+            }
+            if (entry.canDownload != canDownload) {
+                entry.canDownload = canDownload;
+                changed = true;
+            }
+        }
+
+        if (changed) {
             emit dataChanged();
         }
         return;
@@ -633,6 +913,7 @@ void TDLibAdapter::clearSessionData() {
     chatTitlesById_.clear();
     selectedChatId_.clear();
     selectedChatMessages_.clear();
+    selectedChatMessageEntries_.clear();
     emit dataChanged();
 }
 
@@ -745,6 +1026,10 @@ QStringList TDLibAdapter::selectedChatMessages() const {
     return selectedChatMessages_;
 }
 
+QList<ChatMessageEntry> TDLibAdapter::selectedChatMessageEntries() const {
+    return selectedChatMessageEntries_;
+}
+
 void TDLibAdapter::requestChatHistory(const QString &chatId) {
     const QString trimmedChatId = chatId.trimmed();
     if (trimmedChatId.isEmpty()) {
@@ -753,6 +1038,7 @@ void TDLibAdapter::requestChatHistory(const QString &chatId) {
 
     selectedChatId_ = trimmedChatId;
     selectedChatMessages_.clear();
+    selectedChatMessageEntries_.clear();
     emit dataChanged();
 
     sendRequest(std::string("{\"@type\":\"getChatHistory\",\"chat_id\":")
@@ -782,6 +1068,77 @@ void TDLibAdapter::sendTextMessage(const QString &chatId, const QString &text) {
     request["input_message_content"] = content;
 
     sendRequest(QJsonDocument(request).toJson(QJsonDocument::Compact).toStdString());
+}
+
+void TDLibAdapter::sendMediaMessage(const QString &chatId, const QString &filePath, const QString &caption) {
+    const QString trimmedChatId = chatId.trimmed();
+    const QString trimmedPath = filePath.trimmed();
+    if (trimmedChatId.isEmpty() || trimmedPath.isEmpty()) {
+        return;
+    }
+
+    const QString extension = QFileInfo(trimmedPath).suffix().toLower();
+    const QStringList imageExtensions = {"jpg", "jpeg", "png", "bmp", "webp", "gif", "heic"};
+    const QStringList videoExtensions = {"mp4", "m4v", "mov", "mkv", "webm", "avi"};
+    const QStringList audioExtensions = {"mp3", "m4a", "aac", "wav", "ogg", "opus", "flac"};
+
+    QJsonObject inputFile;
+    inputFile["@type"] = "inputFileLocal";
+    inputFile["path"] = trimmedPath;
+
+    QJsonObject content;
+    if (imageExtensions.contains(extension)) {
+        content["@type"] = "inputMessagePhoto";
+        content["photo"] = inputFile;
+        content["added_sticker_file_ids"] = QJsonArray();
+        content["width"] = 0;
+        content["height"] = 0;
+        content["caption"] = formattedText(caption.trimmed());
+    } else if (videoExtensions.contains(extension)) {
+        content["@type"] = "inputMessageVideo";
+        content["video"] = inputFile;
+        content["duration"] = 0;
+        content["width"] = 0;
+        content["height"] = 0;
+        content["supports_streaming"] = true;
+        content["caption"] = formattedText(caption.trimmed());
+        content["added_sticker_file_ids"] = QJsonArray();
+    } else if (audioExtensions.contains(extension)) {
+        content["@type"] = "inputMessageAudio";
+        content["audio"] = inputFile;
+        content["duration"] = 0;
+        content["title"] = QFileInfo(trimmedPath).completeBaseName();
+        content["performer"] = "";
+        content["caption"] = formattedText(caption.trimmed());
+    } else {
+        content["@type"] = "inputMessageDocument";
+        content["document"] = inputFile;
+        content["disable_content_type_detection"] = false;
+        content["caption"] = formattedText(caption.trimmed());
+    }
+
+    QJsonObject request;
+    request["@type"] = "sendMessage";
+    request["chat_id"] = trimmedChatId.toLongLong();
+    request["input_message_content"] = content;
+
+    sendRequest(QJsonDocument(request).toJson(QJsonDocument::Compact).toStdString());
+}
+
+void TDLibAdapter::requestFileDownload(qint64 fileId) {
+    if (fileId <= 0) {
+        return;
+    }
+
+    QJsonObject request;
+    request["@type"] = "downloadFile";
+    request["file_id"] = fileId;
+    request["priority"] = 16;
+    request["offset"] = 0;
+    request["limit"] = 0;
+    request["synchronous"] = false;
+    sendRequest(QJsonDocument(request).toJson(QJsonDocument::Compact).toStdString());
+    appendFlowLog(QString("download_file file_id=%1").arg(fileId));
 }
 
 std::string TDLibAdapter::status() const {

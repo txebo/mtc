@@ -8,7 +8,9 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDesktopServices>
 #include <QFile>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QLabel>
 #include <QLineEdit>
@@ -24,6 +26,7 @@
 #include <QStandardPaths>
 #include <QTimer>
 #include <QToolBox>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -355,7 +358,7 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     bottomLayout->setSpacing(18);
     rootLayout->addLayout(bottomLayout, 1);
 
-    auto *telegramDataBox = new QGroupBox("Lectura desde TDLib", content);
+    auto *telegramDataBox = new QGroupBox("Panel de roster", content);
     auto *telegramDataLayout = new QVBoxLayout(telegramDataBox);
     telegramDataLayout->setContentsMargins(14, 16, 14, 14);
     telegramDataLayout->setSpacing(10);
@@ -363,24 +366,34 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     accountLabel->setWordWrap(true);
     telegramDataLayout->addWidget(accountLabel);
     auto *chatList = new QListWidget(telegramDataBox);
-    chatList->setMinimumHeight(140);
+    chatList->setMinimumHeight(320);
     telegramDataLayout->addWidget(chatList);
+    bottomLayout->addWidget(telegramDataBox, 2);
 
-    auto *messagesList = new QListWidget(telegramDataBox);
+    auto *messagingBox = new QGroupBox("Panel de mensajeria", content);
+    auto *messagingLayout = new QVBoxLayout(messagingBox);
+    messagingLayout->setContentsMargins(14, 16, 14, 14);
+    messagingLayout->setSpacing(10);
+    auto *selectedChatLabel = new QLabel("Chat activo: sin seleccionar", messagingBox);
+    selectedChatLabel->setWordWrap(true);
+    messagingLayout->addWidget(selectedChatLabel);
+    auto *messagesList = new QListWidget(messagingBox);
     messagesList->setMinimumHeight(180);
-    telegramDataLayout->addWidget(messagesList);
+    messagingLayout->addWidget(messagesList);
 
     auto *messageComposerLayout = new QHBoxLayout();
     messageComposerLayout->setSpacing(10);
-    auto *messageInput = new QLineEdit(telegramDataBox);
+    auto *messageInput = new QLineEdit(messagingBox);
     messageInput->setPlaceholderText("Escribe un mensaje...");
-    auto *sendMessageButton = new QPushButton("Responder", telegramDataBox);
+    auto *attachMediaButton = new QPushButton("Adjuntar", messagingBox);
+    attachMediaButton->setMinimumHeight(34);
+    auto *sendMessageButton = new QPushButton("Responder", messagingBox);
     sendMessageButton->setMinimumHeight(34);
     messageComposerLayout->addWidget(messageInput, 1);
+    messageComposerLayout->addWidget(attachMediaButton);
     messageComposerLayout->addWidget(sendMessageButton);
-    telegramDataLayout->addLayout(messageComposerLayout);
-
-    bottomLayout->addWidget(telegramDataBox, 3);
+    messagingLayout->addLayout(messageComposerLayout);
+    bottomLayout->addWidget(messagingBox, 3);
 
     auto *modulesBox = new QGroupBox("Estado de modulos", content);
     auto *modulesGrid = new QGridLayout(modulesBox);
@@ -807,13 +820,14 @@ MainWindow::MainWindow(SessionManager &sessionManager,
             analyticsModuleLabel->setText(QString::fromStdString(analyticsStore_.status()));
         };
 
-    auto updateTelegramDataUi = [accountLabel, chatList, messagesList, this]() {
+    auto updateTelegramDataUi = [accountLabel, chatList, selectedChatLabel, messagesList, this]() {
         const QString selfDisplayName = tdLibAdapter_.selfDisplayName();
         accountLabel->setText(selfDisplayName.isEmpty()
                                   ? "Cuenta: pendiente"
                                   : QString("Cuenta: %1").arg(selfDisplayName));
 
         const QString selectedChatId = tdLibAdapter_.selectedChatId();
+        const QString selectedChatTitle = tdLibAdapter_.selectedChatTitle().trimmed();
         const auto chatEntries = tdLibAdapter_.chatEntries();
         chatList->blockSignals(true);
         chatList->clear();
@@ -821,6 +835,7 @@ MainWindow::MainWindow(SessionManager &sessionManager,
             chatList->addItem("Sin chats cargados todavia.");
             chatList->setEnabled(false);
             chatList->blockSignals(false);
+            selectedChatLabel->setText("Chat activo: sin seleccionar");
             messagesList->clear();
             messagesList->addItem("Selecciona un chat para leer mensajes.");
             return;
@@ -841,24 +856,57 @@ MainWindow::MainWindow(SessionManager &sessionManager,
         }
         chatList->blockSignals(false);
 
+        selectedChatLabel->setText(selectedChatId.isEmpty()
+                                       ? "Chat activo: sin seleccionar"
+                                       : QString("Chat activo: %1")
+                                             .arg(selectedChatTitle.isEmpty()
+                                                      ? selectedChatId
+                                                      : selectedChatTitle));
+
         messagesList->clear();
-        const QStringList messages = tdLibAdapter_.selectedChatMessages();
-        if (messages.isEmpty()) {
+        const QList<ChatMessageEntry> messageEntries = tdLibAdapter_.selectedChatMessageEntries();
+        if (messageEntries.isEmpty()) {
             messagesList->addItem("No hay mensajes cargados para este chat.");
             return;
         }
 
-        for (const QString &line : messages) {
-            messagesList->addItem(line);
+        for (const ChatMessageEntry &entry : messageEntries) {
+            QString renderedLine = entry.line;
+            if (entry.fileId > 0) {
+                if (!entry.localPath.isEmpty()) {
+                    renderedLine += " [archivo local]";
+                } else if (entry.canDownload) {
+                    renderedLine += " [descargar]";
+                } else {
+                    renderedLine += " [archivo]";
+                }
+            }
+
+            auto *item = new QListWidgetItem(renderedLine, messagesList);
+            item->setData(Qt::UserRole, entry.messageId);
+            item->setData(Qt::UserRole + 1, entry.localPath);
+            item->setData(Qt::UserRole + 2, entry.fileId);
+            item->setData(Qt::UserRole + 3, entry.canDownload);
+            item->setData(Qt::UserRole + 4, entry.contentType);
+            if (entry.fileId > 0) {
+                if (!entry.localPath.isEmpty()) {
+                    item->setToolTip(QString("Doble clic para abrir: %1").arg(entry.localPath));
+                } else if (entry.canDownload) {
+                    item->setToolTip("Doble clic para descargar el archivo.");
+                } else {
+                    item->setToolTip("Mensaje multimedia sin descarga disponible.");
+                }
+            }
         }
         messagesList->scrollToBottom();
     };
 
-    auto updateMessagingControls = [this, messageInput, sendMessageButton]() {
-        const bool canSend = tdLibAdapter_.authorizationState() == AuthorizationState::Ready
-                             && !tdLibAdapter_.selectedChatId().isEmpty()
-                             && !messageInput->text().trimmed().isEmpty();
+    auto updateMessagingControls = [this, messageInput, sendMessageButton, attachMediaButton]() {
+        const bool sessionReady = tdLibAdapter_.authorizationState() == AuthorizationState::Ready
+                                  && !tdLibAdapter_.selectedChatId().isEmpty();
+        const bool canSend = sessionReady && !messageInput->text().trimmed().isEmpty();
         sendMessageButton->setEnabled(canSend);
+        attachMediaButton->setEnabled(sessionReady);
     };
 
     updateTelegramUi();
@@ -989,6 +1037,41 @@ MainWindow::MainWindow(SessionManager &sessionManager,
         tdLibAdapter_.sendTextMessage(tdLibAdapter_.selectedChatId(), text);
         messageInput->clear();
         updateMessagingControls();
+    });
+
+    connect(attachMediaButton, &QPushButton::clicked, this, [this, messageInput, updateMessagingControls]() {
+        const QString filePath = QFileDialog::getOpenFileName(
+            this,
+            "Seleccionar archivo para enviar",
+            QStandardPaths::writableLocation(QStandardPaths::HomeLocation));
+        if (filePath.trimmed().isEmpty()) {
+            return;
+        }
+
+        tdLibAdapter_.sendMediaMessage(tdLibAdapter_.selectedChatId(),
+                                       filePath,
+                                       messageInput->text());
+        messageInput->clear();
+        updateMessagingControls();
+    });
+
+    connect(messagesList, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *item) {
+        if (item == nullptr) {
+            return;
+        }
+
+        const QString localPath = item->data(Qt::UserRole + 1).toString().trimmed();
+        const qint64 fileId = item->data(Qt::UserRole + 2).toLongLong();
+        const bool canDownload = item->data(Qt::UserRole + 3).toBool();
+
+        if (!localPath.isEmpty() && QFileInfo::exists(localPath)) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(localPath));
+            return;
+        }
+
+        if (fileId > 0 && canDownload) {
+            tdLibAdapter_.requestFileDownload(fileId);
+        }
     });
 
     connect(&tdLibAdapter_, &TDLibAdapter::stateChanged, this, updateTelegramUi);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QList>
 #include <QMap>
 #include <QPair>
 #include <QString>
@@ -25,6 +26,15 @@ enum class AuthorizationState {
     WaitingOtherDeviceConfirmation,
     Ready,
     Failed,
+};
+
+struct ChatMessageEntry {
+    qint64 messageId = 0;
+    QString line;
+    QString contentType;
+    QString localPath;
+    qint64 fileId = 0;
+    bool canDownload = false;
 };
 
 class TDLibAdapter : public QObject {
@@ -57,8 +67,11 @@ public:
     QString selectedChatId() const;
     QString selectedChatTitle() const;
     QStringList selectedChatMessages() const;
+    QList<ChatMessageEntry> selectedChatMessageEntries() const;
     void requestChatHistory(const QString &chatId);
     void sendTextMessage(const QString &chatId, const QString &text);
+    void sendMediaMessage(const QString &chatId, const QString &filePath, const QString &caption = QString());
+    void requestFileDownload(qint64 fileId);
     std::string status() const;
 
 signals:
@@ -91,6 +104,7 @@ private:
     QMap<QString, QString> chatTitlesById_;
     QString selectedChatId_;
     QStringList selectedChatMessages_;
+    QList<ChatMessageEntry> selectedChatMessageEntries_;
     bool tdlibParametersSent_ = false;
     bool initialDataRequested_ = false;
     bool pendingPhoneNumberSubmission_ = false;
