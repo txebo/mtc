@@ -1,10 +1,13 @@
 #include "core/telegram/TDLibAdapter.h"
 
 #include <QDir>
+#include <QDateTime>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QStandardPaths>
+#include <QTextStream>
 #include <QTimer>
 
 #include <sstream>
@@ -15,12 +18,39 @@
 
 namespace mtc {
 
+namespace {
+
+QString messageTextFromContent(const QJsonObject &content) {
+    if (content.value("@type").toString() != "messageText") {
+        return "[Mensaje no textual]";
+    }
+
+    const QJsonObject textObject = content.value("text").toObject();
+    const QString text = textObject.value("text").toString().trimmed();
+    return text.isEmpty() ? "[Texto vacio]" : text;
+}
+
+QString messageLineFromObject(const QJsonObject &messageObject) {
+    const QString direction = messageObject.value("is_outgoing").toBool(false) ? "Yo" : "Chat";
+    const QDateTime at = QDateTime::fromSecsSinceEpoch(messageObject.value("date").toInt(), Qt::UTC);
+    const QString timeLabel = at.isValid() ? at.toLocalTime().toString("HH:mm") : "--:--";
+    const QString text = messageTextFromContent(messageObject.value("content").toObject());
+    return QString("[%1] %2: %3").arg(timeLabel, direction, text);
+}
+
+}  // namespace
+
 TDLibAdapter::TDLibAdapter(QObject *parent)
     : QObject(parent) {
     tdLibAvailable_ = false;
     pollTimer_ = std::make_unique<QTimer>(this);
     pollTimer_->setInterval(50);
     connect(pollTimer_.get(), &QTimer::timeout, this, &TDLibAdapter::pollResponses);
+    closeSessionTimer_ = std::make_unique<QTimer>(this);
+    closeSessionTimer_->setSingleShot(true);
+    closeSessionTimer_->setInterval(8000);
+    connect(closeSessionTimer_.get(), &QTimer::timeout, this, &TDLibAdapter::handleCloseSessionTimeout);
+    appendFlowLog("adapter_created");
 }
 
 TDLibAdapter::~TDLibAdapter() {
@@ -55,19 +85,73 @@ void TDLibAdapter::initialize() {
     }
 }
 
+void TDLibAdapter::continueAuthorization(const QString &apiId,
+                                         const QString &apiHash,
+                                         const QString &phoneNumber) {
+    const QString nextApiId = apiId.trimmed();
+    const QString nextApiHash = apiHash.trimmed();
+    const QString nextPhoneNumber = phoneNumber.trimmed();
+    appendFlowLog(QString("continue_authorization state=%1").arg(stateKey(authorizationState_)));
+
+    if (!tdLibAvailable_) {
+        setAuthorizationState(AuthorizationState::MissingDependency,
+                              "No se puede iniciar sesion todavia porque TDLib no esta presente en el sistema.");
+        return;
+    }
+
+    switch (authorizationState_) {
+        case AuthorizationState::ClosingSession:
+            return;
+        case AuthorizationState::WaitingPhoneNumber:
+            apiId_ = nextApiId;
+            apiHash_ = nextApiHash;
+            submitPhoneNumber(nextPhoneNumber);
+            return;
+        case AuthorizationState::WaitingCode:
+        case AuthorizationState::WaitingPassword:
+        case AuthorizationState::WaitingOtherDeviceConfirmation:
+            return;
+        case AuthorizationState::Ready:
+        case AuthorizationState::NotInitialized:
+        case AuthorizationState::MissingDependency:
+        case AuthorizationState::WaitingParameters:
+        case AuthorizationState::WaitingEncryptionKey:
+        case AuthorizationState::Failed:
+            submitBootstrap(nextApiId, nextApiHash, nextPhoneNumber);
+            return;
+    }
+}
+
 void TDLibAdapter::submitBootstrap(const QString &apiId,
                                    const QString &apiHash,
                                    const QString &phoneNumber) {
+    const QString nextApiId = apiId.trimmed();
+    const QString nextApiHash = apiHash.trimmed();
+    const QString nextPhoneNumber = phoneNumber.trimmed();
+    const QString nextSessionKey = buildSessionKey(nextApiId, nextPhoneNumber);
+
     if (authorizationState_ == AuthorizationState::Ready) {
+        if (!activeSessionKey_.isEmpty() && nextSessionKey != activeSessionKey_) {
+            pendingBootstrapSubmission_ = true;
+            pendingApiId_ = nextApiId;
+            pendingApiHash_ = nextApiHash;
+            pendingPhoneNumber_ = nextPhoneNumber;
+            resetSession();
+            return;
+        }
+
+        apiId_ = nextApiId;
+        apiHash_ = nextApiHash;
+        phoneNumber_ = nextPhoneNumber;
         requestInitialData();
         setAuthorizationState(AuthorizationState::Ready,
                               "La sesion actual ya estaba autenticada. Se reutilizo la sesion local y se refrescaron los datos.");
         return;
     }
 
-    apiId_ = apiId.trimmed();
-    apiHash_ = apiHash.trimmed();
-    phoneNumber_ = phoneNumber.trimmed();
+    apiId_ = nextApiId;
+    apiHash_ = nextApiHash;
+    phoneNumber_ = nextPhoneNumber;
 
     if (!tdLibAvailable_) {
         setAuthorizationState(AuthorizationState::MissingDependency,
@@ -119,12 +203,31 @@ void TDLibAdapter::submitPhoneNumber(const QString &phoneNumber) {
         return;
     }
 
+    if (authorizationState_ == AuthorizationState::WaitingCode
+        || authorizationState_ == AuthorizationState::WaitingPassword
+        || authorizationState_ == AuthorizationState::WaitingOtherDeviceConfirmation) {
+        setAuthorizationState(authorizationState_,
+                              "El flujo ya avanzo al siguiente paso. Continua con codigo o confirmacion segun corresponda.");
+        return;
+    }
+
     submitTdlibParameters();
-    sendRequest(std::string("{\"@type\":\"setAuthenticationPhoneNumber\",\"phone_number\":\"")
-                + phoneNumber_.toStdString()
-                + "\",\"settings\":{\"@type\":\"phoneNumberAuthenticationSettings\",\"allow_flash_call\":false,\"allow_missed_call\":false,\"is_current_phone_number\":true,\"allow_sms_retriever_api\":false}}");
-    setAuthorizationState(AuthorizationState::WaitingCode,
-                          "Solicitud de telefono enviada a TDLib. Esperando el codigo de autenticacion.");
+    if (authorizationState_ == AuthorizationState::WaitingParameters
+        || authorizationState_ == AuthorizationState::NotInitialized
+        || authorizationState_ == AuthorizationState::Failed) {
+        pendingPhoneNumberSubmission_ = true;
+        setAuthorizationState(AuthorizationState::WaitingPhoneNumber,
+                              "Telefono capturado. TDLib aun prepara parametros; se enviara automaticamente al quedar listo.");
+        return;
+    }
+
+    if (phoneNumberRequestInFlight_) {
+        return;
+    }
+
+    sendPhoneNumberRequest();
+    setAuthorizationState(AuthorizationState::WaitingPhoneNumber,
+                          "Solicitud de telefono enviada a TDLib. Esperando confirmacion para pedir el codigo.");
 }
 
 void TDLibAdapter::submitAuthenticationCode(const QString &code) {
@@ -209,8 +312,11 @@ void TDLibAdapter::resetSession() {
     clearSessionData();
     initialDataRequested_ = false;
     tdlibParametersSent_ = false;
-    setAuthorizationState(AuthorizationState::NotInitialized,
-                          "Solicitud de reinicio enviada. Vuelve a iniciar el flujo cuando TDLib cierre la sesion actual.");
+    activeSessionKey_.clear();
+    setAuthorizationState(AuthorizationState::ClosingSession,
+                          "Solicitud de reinicio enviada. Esperando a que TDLib cierre la sesion actual.");
+    closeSessionTimer_->start();
+    appendFlowLog("reset_session_requested");
 }
 
 void TDLibAdapter::sendRequest(const std::string &request) {
@@ -221,6 +327,44 @@ void TDLibAdapter::sendRequest(const std::string &request) {
 #else
     static_cast<void>(request);
 #endif
+}
+
+void TDLibAdapter::sendPhoneNumberRequest() {
+    if (phoneNumberRequestInFlight_) {
+        return;
+    }
+
+    sendRequest(std::string("{\"@type\":\"setAuthenticationPhoneNumber\",\"phone_number\":\"")
+                + phoneNumber_.toStdString()
+                + "\",\"settings\":{\"@type\":\"phoneNumberAuthenticationSettings\",\"allow_flash_call\":false,\"allow_missed_call\":false,\"is_current_phone_number\":true,\"allow_sms_retriever_api\":false}}");
+    pendingPhoneNumberSubmission_ = false;
+    phoneNumberRequestInFlight_ = true;
+}
+
+QString TDLibAdapter::buildSessionKey(const QString &apiId, const QString &phoneNumber) const {
+    QString rawKey = apiId.trimmed();
+    if (!phoneNumber.trimmed().isEmpty()) {
+        if (!rawKey.isEmpty()) {
+            rawKey += "_";
+        }
+        rawKey += phoneNumber.trimmed();
+    }
+
+    if (rawKey.isEmpty()) {
+        rawKey = "default";
+    }
+
+    QString sanitized;
+    sanitized.reserve(rawKey.size());
+    for (const QChar character : rawKey) {
+        if (character.isLetterOrNumber() || character == '_' || character == '-' || character == '.') {
+            sanitized.append(character);
+        } else {
+            sanitized.append('_');
+        }
+    }
+
+    return sanitized;
 }
 
 void TDLibAdapter::pollResponses() {
@@ -235,29 +379,90 @@ void TDLibAdapter::pollResponses() {
 #endif
 }
 
+void TDLibAdapter::handleCloseSessionTimeout() {
+    if (authorizationState_ != AuthorizationState::ClosingSession) {
+        return;
+    }
+    appendFlowLog("close_session_timeout");
+
+#if defined(MTC_HAS_TDLIB)
+    if (tdJsonClient_ != nullptr) {
+        td_json_client_destroy(tdJsonClient_);
+        tdJsonClient_ = nullptr;
+    }
+    tdJsonClient_ = td_json_client_create();
+    tdLibAvailable_ = tdJsonClient_ != nullptr;
+#endif
+
+    tdlibParametersSent_ = false;
+    initialDataRequested_ = false;
+    phoneNumberRequestInFlight_ = false;
+    activeSessionKey_.clear();
+    clearSessionData();
+
+    if (!tdLibAvailable_) {
+        setAuthorizationState(AuthorizationState::MissingDependency,
+                              "No se pudo recuperar TDLib tras esperar el cierre de sesion.");
+        appendFlowLog("close_session_timeout_recovery_failed");
+        return;
+    }
+
+    setAuthorizationState(AuthorizationState::WaitingParameters,
+                          "TDLib no confirmo cierre a tiempo. Se reinicio el cliente y se reanuda el flujo.");
+    appendFlowLog("close_session_timeout_recovery_ok");
+
+    if (pendingBootstrapSubmission_) {
+        const QString pendingApiId = pendingApiId_;
+        const QString pendingApiHash = pendingApiHash_;
+        const QString pendingPhoneNumber = pendingPhoneNumber_;
+        pendingBootstrapSubmission_ = false;
+        pendingApiId_.clear();
+        pendingApiHash_.clear();
+        pendingPhoneNumber_.clear();
+        submitBootstrap(pendingApiId, pendingApiHash, pendingPhoneNumber);
+    }
+}
+
 void TDLibAdapter::handleResponse(const char *response) {
     const QString payload = QString::fromUtf8(response);
 
     if (payload.contains("\"authorizationStateWaitTdlibParameters\"")) {
         tdlibParametersSent_ = false;
+        phoneNumberRequestInFlight_ = false;
         setAuthorizationState(AuthorizationState::WaitingParameters,
                               "TDLib espera setTdlibParameters. Completa api_id, api_hash y telefono para seguir.");
         return;
     }
 
+    if (payload.contains("\"authorizationStateWaitEncryptionKey\"")) {
+        sendRequest("{\"@type\":\"checkDatabaseEncryptionKey\",\"encryption_key\":\"\"}");
+        setAuthorizationState(AuthorizationState::WaitingEncryptionKey,
+                              "TDLib pide validar la clave de base local. Se envio clave vacia por defecto para continuar.");
+        return;
+    }
+
     if (payload.contains("\"authorizationStateWaitPhoneNumber\"")) {
+        if (pendingPhoneNumberSubmission_ && !phoneNumber_.isEmpty()) {
+            sendPhoneNumberRequest();
+            setAuthorizationState(AuthorizationState::WaitingPhoneNumber,
+                                  "TDLib acepto los parametros y se envio el telefono automaticamente.");
+            return;
+        }
+
         setAuthorizationState(AuthorizationState::WaitingPhoneNumber,
                               "TDLib acepto los parametros. Falta enviar el numero de telefono.");
         return;
     }
 
     if (payload.contains("\"authorizationStateWaitCode\"")) {
+        phoneNumberRequestInFlight_ = false;
         setAuthorizationState(AuthorizationState::WaitingCode,
                               "TDLib envio el codigo. El siguiente paso es capturarlo y validarlo en la UI.");
         return;
     }
 
     if (payload.contains("\"authorizationStateWaitPassword\"")) {
+        phoneNumberRequestInFlight_ = false;
         setAuthorizationState(AuthorizationState::WaitingPassword,
                               "La cuenta requiere verificacion en dos pasos. Falta capturar la contrasena de Telegram.");
         return;
@@ -270,6 +475,7 @@ void TDLibAdapter::handleResponse(const char *response) {
     }
 
     if (payload.contains("\"authorizationStateReady\"")) {
+        phoneNumberRequestInFlight_ = false;
         requestInitialData();
         setAuthorizationState(AuthorizationState::Ready,
                               "La sesion TDLib quedo autenticada y lista para usar.");
@@ -277,11 +483,25 @@ void TDLibAdapter::handleResponse(const char *response) {
     }
 
     if (payload.contains("\"authorizationStateClosed\"")) {
+        closeSessionTimer_->stop();
         clearSessionData();
         tdlibParametersSent_ = false;
         initialDataRequested_ = false;
+        phoneNumberRequestInFlight_ = false;
+        activeSessionKey_.clear();
         setAuthorizationState(AuthorizationState::NotInitialized,
                               "TDLib cerro la sesion actual. Puedes iniciar un nuevo flujo de autenticacion.");
+
+        if (pendingBootstrapSubmission_) {
+            const QString pendingApiId = pendingApiId_;
+            const QString pendingApiHash = pendingApiHash_;
+            const QString pendingPhoneNumber = pendingPhoneNumber_;
+            pendingBootstrapSubmission_ = false;
+            pendingApiId_.clear();
+            pendingApiHash_.clear();
+            pendingPhoneNumber_.clear();
+            submitBootstrap(pendingApiId, pendingApiHash, pendingPhoneNumber);
+        }
         return;
     }
 
@@ -294,6 +514,37 @@ void TDLibAdapter::handleResponse(const char *response) {
     const QString type = object.value("@type").toString();
 
     if (type == "error") {
+        phoneNumberRequestInFlight_ = false;
+        const int code = object.value("code").toInt();
+        const QString message = object.value("message").toString().trimmed();
+        const bool isRequestAborted = message.contains("REQUEST_ABORTED", Qt::CaseInsensitive)
+                                      || message.contains("REQUEST ABORTED", Qt::CaseInsensitive)
+                                      || message.contains("REQUEST_ABORT", Qt::CaseInsensitive)
+                                      || message.contains("REQUEST ABORT", Qt::CaseInsensitive)
+                                      || message.contains("request aborted", Qt::CaseInsensitive);
+        if (code == 500 && isRequestAborted) {
+            appendFlowLog(QString("request_aborted state=%1").arg(stateKey(authorizationState_)));
+            if (authorizationState_ == AuthorizationState::ClosingSession) {
+                return;
+            }
+
+            if (authorizationState_ == AuthorizationState::WaitingParameters
+                || authorizationState_ == AuthorizationState::NotInitialized) {
+                pendingPhoneNumberSubmission_ = !phoneNumber_.isEmpty();
+                setAuthorizationState(AuthorizationState::WaitingPhoneNumber,
+                                      "TDLib devolvio REQUEST_ABORTED mientras preparaba el login. Se reintentara el telefono cuando TDLib quede listo.");
+                return;
+            }
+
+            pendingPhoneNumberSubmission_ = false;
+            pendingBootstrapSubmission_ = true;
+            pendingApiId_ = apiId_;
+            pendingApiHash_ = apiHash_;
+            pendingPhoneNumber_ = phoneNumber_;
+            resetSession();
+            return;
+        }
+
         setAuthorizationState(AuthorizationState::Failed, extractTdLibErrorMessage(object));
         return;
     }
@@ -337,6 +588,36 @@ void TDLibAdapter::handleResponse(const char *response) {
         return;
     }
 
+    if (type == "messages") {
+        const QJsonArray messages = object.value("messages").toArray();
+        QString chatId = selectedChatId_;
+        if (!messages.isEmpty()) {
+            chatId = QString::number(messages.first().toObject().value("chat_id").toVariant().toLongLong());
+        }
+
+        if (!chatId.isEmpty() && chatId == selectedChatId_) {
+            QStringList lines;
+            lines.reserve(messages.size());
+            for (int index = messages.size() - 1; index >= 0; --index) {
+                const QJsonObject messageObject = messages[index].toObject();
+                lines.append(messageLineFromObject(messageObject));
+            }
+            selectedChatMessages_ = lines;
+            emit dataChanged();
+        }
+        return;
+    }
+
+    if (type == "updateNewMessage") {
+        const QJsonObject messageObject = object.value("message").toObject();
+        const QString chatId = QString::number(messageObject.value("chat_id").toVariant().toLongLong());
+        if (!chatId.isEmpty() && chatId == selectedChatId_) {
+            selectedChatMessages_.append(messageLineFromObject(messageObject));
+            emit dataChanged();
+        }
+        return;
+    }
+
     if (type == "updateChatTitle") {
         const QString chatId = QString::number(object.value("chat_id").toVariant().toLongLong());
         const QString title = object.value("title").toString().trimmed();
@@ -350,6 +631,8 @@ void TDLibAdapter::handleResponse(const char *response) {
 void TDLibAdapter::clearSessionData() {
     selfDisplayName_.clear();
     chatTitlesById_.clear();
+    selectedChatId_.clear();
+    selectedChatMessages_.clear();
     emit dataChanged();
 }
 
@@ -370,14 +653,16 @@ void TDLibAdapter::submitTdlibParameters() {
     }
 
     const QString dataRoot = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    QDir().mkpath(dataRoot + "/tdlib/database");
-    QDir().mkpath(dataRoot + "/tdlib/files");
+    const QString sessionKey = buildSessionKey(apiId_, phoneNumber_);
+    const QString profileRoot = dataRoot + "/tdlib/profiles/" + sessionKey;
+    QDir().mkpath(profileRoot + "/database");
+    QDir().mkpath(profileRoot + "/files");
 
     const std::string parametersRequest =
         std::string("{\"@type\":\"setTdlibParameters\",\"use_test_dc\":false,\"database_directory\":\"")
-        + (dataRoot + "/tdlib/database").toStdString()
+        + (profileRoot + "/database").toStdString()
         + "\",\"files_directory\":\""
-        + (dataRoot + "/tdlib/files").toStdString()
+        + (profileRoot + "/files").toStdString()
         + "\",\"database_encryption_key\":\"\",\"use_file_database\":true,\"use_chat_info_database\":true,\"use_message_database\":true,"
           "\"use_secret_chats\":false,\"api_id\":"
         + apiId_.toStdString()
@@ -388,6 +673,7 @@ void TDLibAdapter::submitTdlibParameters() {
 
     sendRequest(parametersRequest);
     tdlibParametersSent_ = true;
+    activeSessionKey_ = sessionKey;
 }
 
 bool TDLibAdapter::isTdLibAvailable() const {
@@ -404,8 +690,12 @@ QString TDLibAdapter::authorizationStateLabel() const {
             return "No inicializado";
         case AuthorizationState::MissingDependency:
             return "TDLib ausente";
+        case AuthorizationState::ClosingSession:
+            return "Cerrando sesion";
         case AuthorizationState::WaitingParameters:
             return "Esperando parametros";
+        case AuthorizationState::WaitingEncryptionKey:
+            return "Esperando clave local";
         case AuthorizationState::WaitingPhoneNumber:
             return "Esperando telefono";
         case AuthorizationState::WaitingCode:
@@ -433,6 +723,65 @@ QString TDLibAdapter::selfDisplayName() const {
 
 QStringList TDLibAdapter::chatTitles() const {
     return chatTitlesById_.values();
+}
+
+QList<QPair<QString, QString>> TDLibAdapter::chatEntries() const {
+    QList<QPair<QString, QString>> entries;
+    for (auto it = chatTitlesById_.cbegin(); it != chatTitlesById_.cend(); ++it) {
+        entries.append(qMakePair(it.key(), it.value()));
+    }
+    return entries;
+}
+
+QString TDLibAdapter::selectedChatId() const {
+    return selectedChatId_;
+}
+
+QString TDLibAdapter::selectedChatTitle() const {
+    return chatTitlesById_.value(selectedChatId_);
+}
+
+QStringList TDLibAdapter::selectedChatMessages() const {
+    return selectedChatMessages_;
+}
+
+void TDLibAdapter::requestChatHistory(const QString &chatId) {
+    const QString trimmedChatId = chatId.trimmed();
+    if (trimmedChatId.isEmpty()) {
+        return;
+    }
+
+    selectedChatId_ = trimmedChatId;
+    selectedChatMessages_.clear();
+    emit dataChanged();
+
+    sendRequest(std::string("{\"@type\":\"getChatHistory\",\"chat_id\":")
+                + trimmedChatId.toStdString()
+                + ",\"from_message_id\":0,\"offset\":0,\"limit\":50,\"only_local\":false}");
+}
+
+void TDLibAdapter::sendTextMessage(const QString &chatId, const QString &text) {
+    const QString trimmedChatId = chatId.trimmed();
+    const QString trimmedText = text.trimmed();
+    if (trimmedChatId.isEmpty() || trimmedText.isEmpty()) {
+        return;
+    }
+
+    QJsonObject inputText;
+    inputText["@type"] = "formattedText";
+    inputText["text"] = trimmedText;
+
+    QJsonObject content;
+    content["@type"] = "inputMessageText";
+    content["text"] = inputText;
+    content["clear_draft"] = false;
+
+    QJsonObject request;
+    request["@type"] = "sendMessage";
+    request["chat_id"] = trimmedChatId.toLongLong();
+    request["input_message_content"] = content;
+
+    sendRequest(QJsonDocument(request).toJson(QJsonDocument::Compact).toStdString());
 }
 
 std::string TDLibAdapter::status() const {
@@ -483,7 +832,60 @@ QString TDLibAdapter::extractTdLibErrorMessage(const QJsonObject &object) const 
     return QString("TDLib error %1: %2").arg(code).arg(message);
 }
 
+QString TDLibAdapter::stateKey(AuthorizationState state) const {
+    switch (state) {
+        case AuthorizationState::NotInitialized:
+            return "not_initialized";
+        case AuthorizationState::MissingDependency:
+            return "missing_dependency";
+        case AuthorizationState::ClosingSession:
+            return "closing_session";
+        case AuthorizationState::WaitingParameters:
+            return "waiting_parameters";
+        case AuthorizationState::WaitingEncryptionKey:
+            return "waiting_encryption_key";
+        case AuthorizationState::WaitingPhoneNumber:
+            return "waiting_phone";
+        case AuthorizationState::WaitingCode:
+            return "waiting_code";
+        case AuthorizationState::WaitingPassword:
+            return "waiting_password";
+        case AuthorizationState::WaitingOtherDeviceConfirmation:
+            return "waiting_other_device_confirmation";
+        case AuthorizationState::Ready:
+            return "ready";
+        case AuthorizationState::Failed:
+            return "failed";
+    }
+
+    return "unknown";
+}
+
+void TDLibAdapter::appendFlowLog(const QString &event) const {
+    const QString dataRoot = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QDir().mkpath(dataRoot);
+
+    QFile file(dataRoot + "/tdlib_auth_flow.log");
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        return;
+    }
+
+    QTextStream stream(&file);
+    stream << QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)
+           << "Z"
+           << " | "
+           << event
+           << "\n";
+}
+
 void TDLibAdapter::setAuthorizationState(AuthorizationState state, const QString &diagnosticMessage) {
+    if (authorizationState_ == state && diagnosticMessage_ == diagnosticMessage) {
+        return;
+    }
+
+    appendFlowLog(QString("state_change %1 -> %2")
+                      .arg(stateKey(authorizationState_), stateKey(state)));
+
     authorizationState_ = state;
     diagnosticMessage_ = diagnosticMessage;
     emit stateChanged();

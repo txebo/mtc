@@ -6,15 +6,24 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFile>
+#include <QFileInfo>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QMenu>
+#include <QMenuBar>
+#include <QPlainTextEdit>
 #include <QProcessEnvironment>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QString>
+#include <QStandardPaths>
 #include <QTimer>
+#include <QToolBox>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -90,6 +99,55 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     subtitle->setWordWrap(true);
     rootLayout->addWidget(subtitle);
 
+    auto *toolsMenu = menuBar()->addMenu("Herramientas");
+    auto *viewFlowLogAction = toolsMenu->addAction("Ver Log de Flujo");
+    connect(viewFlowLogAction, &QAction::triggered, this, [this]() {
+        auto *dialog = new QDialog(this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->setWindowTitle("Log de Flujo TDLib");
+        dialog->resize(920, 620);
+
+        auto *layout = new QVBoxLayout(dialog);
+        layout->setContentsMargins(12, 12, 12, 12);
+        layout->setSpacing(10);
+
+        const QString dataRoot = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        const QString logPath = dataRoot + "/tdlib_auth_flow.log";
+
+        auto *pathLabel = new QLabel(QString("Archivo: %1").arg(logPath), dialog);
+        pathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+        pathLabel->setCursor(Qt::IBeamCursor);
+        layout->addWidget(pathLabel);
+
+        auto *logView = new QPlainTextEdit(dialog);
+        logView->setReadOnly(true);
+        logView->setLineWrapMode(QPlainTextEdit::NoWrap);
+        layout->addWidget(logView, 1);
+
+        auto reloadLog = [logView, logPath]() {
+            QFile file(logPath);
+            if (!QFileInfo::exists(logPath)) {
+                logView->setPlainText("Aun no existe log de flujo para esta sesion.");
+                return;
+            }
+            if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                logView->setPlainText("No se pudo abrir el log de flujo.");
+                return;
+            }
+            logView->setPlainText(QString::fromUtf8(file.readAll()));
+            logView->moveCursor(QTextCursor::End);
+        };
+        reloadLog();
+
+        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
+        auto *reloadButton = buttons->addButton("Recargar", QDialogButtonBox::ActionRole);
+        connect(reloadButton, &QPushButton::clicked, dialog, reloadLog);
+        connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close);
+        layout->addWidget(buttons);
+
+        dialog->show();
+    });
+
     auto *workspaceLayout = new QHBoxLayout();
     workspaceLayout->setSpacing(18);
     rootLayout->addLayout(workspaceLayout, 1);
@@ -102,7 +160,7 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     rightColumn->setSpacing(14);
     workspaceLayout->addLayout(rightColumn, 4);
 
-    auto *loginBox = new QGroupBox("Panel de cuenta Telegram", content);
+    auto *loginBox = new QGroupBox("Panel de sesion", content);
     auto *loginLayout = new QVBoxLayout(loginBox);
     loginLayout->setContentsMargins(14, 16, 14, 14);
     loginLayout->setSpacing(12);
@@ -171,14 +229,41 @@ MainWindow::MainWindow(SessionManager &sessionManager,
 
     auto *sessionActionsLayout = new QHBoxLayout();
     sessionActionsLayout->setSpacing(10);
-    auto *submitButton = new QPushButton("Iniciar flujo", accountBox);
+    auto *submitButton = new QPushButton("Continuar", accountBox);
     auto *saveProfileButton = new QPushButton("Guardar perfil", accountBox);
     submitButton->setMinimumHeight(34);
     saveProfileButton->setMinimumHeight(34);
     sessionActionsLayout->addWidget(submitButton);
     sessionActionsLayout->addWidget(saveProfileButton);
     accountLayout->addRow("Acciones", sessionActionsLayout);
-    loginLayout->addWidget(accountBox);
+
+    auto *profilesBox = new QGroupBox("Perfiles locales", loginBox);
+    auto *profilesLayout = new QVBoxLayout(profilesBox);
+    profilesLayout->setContentsMargins(14, 16, 14, 14);
+    profilesLayout->setSpacing(10);
+    auto *profilesHint = new QLabel(
+        "Selecciona un perfil para preparar automaticamente la sesion y continuar el flujo por estado.",
+        profilesBox);
+    profilesHint->setWordWrap(true);
+    profilesLayout->addWidget(profilesHint);
+
+    auto *profilesList = new QListWidget(profilesBox);
+    profilesList->setMinimumHeight(180);
+    profilesLayout->addWidget(profilesList);
+
+    auto *profilesActionsLayout = new QHBoxLayout();
+    profilesActionsLayout->setSpacing(10);
+    auto *loadProfileButton = new QPushButton("Cargar perfil", profilesBox);
+    auto *removeProfileButton = new QPushButton("Eliminar perfil", profilesBox);
+    loadProfileButton->setMinimumHeight(34);
+    removeProfileButton->setMinimumHeight(34);
+    profilesActionsLayout->addWidget(loadProfileButton);
+    profilesActionsLayout->addWidget(removeProfileButton);
+    profilesLayout->addLayout(profilesActionsLayout);
+
+    auto *profilesStatusLabel = new QLabel(profilesBox);
+    profilesStatusLabel->setWordWrap(true);
+    profilesLayout->addWidget(profilesStatusLabel);
 
     auto *authBox = new QGroupBox("Validar acceso", loginBox);
     auto *authLayout = new QFormLayout(authBox);
@@ -187,16 +272,6 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     authLayout->setFormAlignment(Qt::AlignTop);
     authLayout->setHorizontalSpacing(14);
     authLayout->setVerticalSpacing(10);
-
-    auto *phoneActionsLayout = new QHBoxLayout();
-    phoneActionsLayout->setSpacing(10);
-    auto *sendPhoneButton = new QPushButton("Enviar telefono", authBox);
-    auto *submitCodeButton = new QPushButton("Enviar codigo", authBox);
-    sendPhoneButton->setMinimumHeight(34);
-    submitCodeButton->setMinimumHeight(34);
-    phoneActionsLayout->addWidget(sendPhoneButton);
-    phoneActionsLayout->addWidget(submitCodeButton);
-    authLayout->addRow("Telefono y codigo", phoneActionsLayout);
 
     auto *codeInput = new QLineEdit(authBox);
     codeInput->setPlaceholderText("12345");
@@ -208,10 +283,22 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     passwordInput->setEchoMode(QLineEdit::Password);
     authLayout->addRow("Contrasena", passwordInput);
 
+    auto *authActionsLayout = new QHBoxLayout();
+    authActionsLayout->setSpacing(10);
+    auto *submitCodeButton = new QPushButton("Enviar codigo", authBox);
     auto *submitPasswordButton = new QPushButton("Enviar contrasena", authBox);
+    submitCodeButton->setMinimumHeight(34);
     submitPasswordButton->setMinimumHeight(34);
-    authLayout->addRow("2FA", submitPasswordButton);
-    loginLayout->addWidget(authBox);
+    authActionsLayout->addWidget(submitCodeButton);
+    authActionsLayout->addWidget(submitPasswordButton);
+    authLayout->addRow("Acciones", authActionsLayout);
+
+    auto *sessionStepsToolbox = new QToolBox(loginBox);
+    sessionStepsToolbox->addItem(profilesBox, "1) Perfiles");
+    sessionStepsToolbox->addItem(accountBox, "2) Preparar cuenta");
+    sessionStepsToolbox->addItem(authBox, "3) Validar acceso");
+    sessionStepsToolbox->setCurrentIndex(0);
+    loginLayout->addWidget(sessionStepsToolbox);
 
     auto *sessionBox = new QGroupBox("Estado y control de sesion", loginBox);
     auto *sessionBoxLayout = new QFormLayout(sessionBox);
@@ -240,40 +327,12 @@ MainWindow::MainWindow(SessionManager &sessionManager,
         "background: #fff8e8; border: 1px solid #ecd9a5; border-radius: 8px;",
         sessionBox);
     diagnosticLabel->setMinimumHeight(92);
+    diagnosticLabel->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+    diagnosticLabel->setCursor(Qt::IBeamCursor);
     sessionBoxLayout->addRow("Diagnostico", diagnosticLabel);
     loginLayout->addWidget(sessionBox);
 
     leftColumn->addWidget(loginBox);
-
-    auto *profilesBox = new QGroupBox("Perfiles locales", content);
-    auto *profilesLayout = new QVBoxLayout(profilesBox);
-    profilesLayout->setContentsMargins(14, 16, 14, 14);
-    profilesLayout->setSpacing(10);
-    auto *profilesHint = new QLabel(
-        "Guarda credenciales base por cuenta para retomar el bootstrap sin depender de variables de entorno.",
-        profilesBox);
-    profilesHint->setWordWrap(true);
-    profilesLayout->addWidget(profilesHint);
-
-    auto *profilesList = new QListWidget(profilesBox);
-    profilesList->setMinimumHeight(210);
-    profilesLayout->addWidget(profilesList);
-
-    auto *profilesActionsLayout = new QHBoxLayout();
-    profilesActionsLayout->setSpacing(10);
-    auto *loadProfileButton = new QPushButton("Cargar perfil", profilesBox);
-    auto *removeProfileButton = new QPushButton("Eliminar perfil", profilesBox);
-    loadProfileButton->setMinimumHeight(34);
-    removeProfileButton->setMinimumHeight(34);
-    profilesActionsLayout->addWidget(loadProfileButton);
-    profilesActionsLayout->addWidget(removeProfileButton);
-    profilesLayout->addLayout(profilesActionsLayout);
-
-    auto *profilesStatusLabel = new QLabel(profilesBox);
-    profilesStatusLabel->setWordWrap(true);
-    profilesLayout->addWidget(profilesStatusLabel);
-
-    rightColumn->addWidget(profilesBox, 1);
 
     auto *notesBox = new QGroupBox("Siguiente integracion real", content);
     auto *notesLayout = new QVBoxLayout(notesBox);
@@ -304,8 +363,23 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     accountLabel->setWordWrap(true);
     telegramDataLayout->addWidget(accountLabel);
     auto *chatList = new QListWidget(telegramDataBox);
-    chatList->setMinimumHeight(220);
+    chatList->setMinimumHeight(140);
     telegramDataLayout->addWidget(chatList);
+
+    auto *messagesList = new QListWidget(telegramDataBox);
+    messagesList->setMinimumHeight(180);
+    telegramDataLayout->addWidget(messagesList);
+
+    auto *messageComposerLayout = new QHBoxLayout();
+    messageComposerLayout->setSpacing(10);
+    auto *messageInput = new QLineEdit(telegramDataBox);
+    messageInput->setPlaceholderText("Escribe un mensaje...");
+    auto *sendMessageButton = new QPushButton("Responder", telegramDataBox);
+    sendMessageButton->setMinimumHeight(34);
+    messageComposerLayout->addWidget(messageInput, 1);
+    messageComposerLayout->addWidget(sendMessageButton);
+    telegramDataLayout->addLayout(messageComposerLayout);
+
     bottomLayout->addWidget(telegramDataBox, 3);
 
     auto *modulesBox = new QGroupBox("Estado de modulos", content);
@@ -354,12 +428,21 @@ MainWindow::MainWindow(SessionManager &sessionManager,
                     "3. Guarda un perfil, cargalo y eliminalo.\n"
                     "4. Inicia el flujo y confirma que el siguiente paso sea telefono.";
                 break;
+            case AuthorizationState::WaitingEncryptionKey:
+                currentStep = "Fase 1 de 5: inicializar base local";
+                guideText =
+                    "TDLib esta abriendo su base local:\n"
+                    "1. Espera a que avance automaticamente.\n"
+                    "2. Si se detiene, usa Reiniciar sesion.\n"
+                    "3. Luego continua con telefono cuando lo solicite.\n"
+                    "4. Verifica que el estado cambie a telefono.";
+                break;
             case AuthorizationState::WaitingPhoneNumber:
                 currentStep = "Fase 2 de 5: enviar telefono";
                 guideText =
                     "Te toca probar la Fase 2:\n"
                     "1. Captura o corrige el telefono.\n"
-                    "2. Pulsa Enviar telefono.\n"
+                    "2. Pulsa Continuar.\n"
                     "3. Verifica que el estado cambie a codigo.\n"
                     "4. Confirma que el panel Telegram refleje el nuevo estado.";
                 break;
@@ -368,7 +451,7 @@ MainWindow::MainWindow(SessionManager &sessionManager,
                 guideText =
                     "Te toca probar la Fase 3:\n"
                     "1. Introduce el codigo recibido.\n"
-                    "2. Pulsa Enviar codigo.\n"
+                    "2. Pulsa Continuar.\n"
                     "3. Verifica si avanza a listo o a contrasena 2FA.\n"
                     "4. Revisa que el diagnostico explique el resultado.";
                 break;
@@ -377,7 +460,7 @@ MainWindow::MainWindow(SessionManager &sessionManager,
                 guideText =
                     "Te toca probar la Fase 4:\n"
                     "1. Escribe la contrasena 2FA.\n"
-                    "2. Pulsa Enviar contrasena.\n"
+                    "2. Pulsa Continuar.\n"
                     "3. Verifica que la sesion quede lista.\n"
                     "4. Si falla, confirma que el diagnostico sea claro.";
                 break;
@@ -408,6 +491,15 @@ MainWindow::MainWindow(SessionManager &sessionManager,
                     "3. Confirma que los botones se habiliten o deshabiliten bien.\n"
                     "4. Revisa el panel de modulos y diagnostico.";
                 break;
+            case AuthorizationState::ClosingSession:
+                currentStep = "Cerrando sesion TDLib";
+                guideText =
+                    "TDLib esta cerrando la sesion anterior:\n"
+                    "1. Espera confirmacion de cierre.\n"
+                    "2. No inicies flujo todavia.\n"
+                    "3. Al quedar no inicializado, vuelve a iniciar.\n"
+                    "4. Luego continua con el telefono.";
+                break;
             case AuthorizationState::Failed:
                 currentStep = "Flujo interrumpido";
                 guideText =
@@ -432,7 +524,9 @@ MainWindow::MainWindow(SessionManager &sessionManager,
             switch (state) {
                 case AuthorizationState::NotInitialized:
                 case AuthorizationState::WaitingParameters:
+                case AuthorizationState::WaitingEncryptionKey:
                 case AuthorizationState::MissingDependency:
+                case AuthorizationState::ClosingSession:
                 case AuthorizationState::Failed:
                     return 0;
                 case AuthorizationState::WaitingPhoneNumber:
@@ -454,7 +548,9 @@ MainWindow::MainWindow(SessionManager &sessionManager,
                 switch (state) {
                     case AuthorizationState::NotInitialized:
                     case AuthorizationState::WaitingParameters:
+                    case AuthorizationState::WaitingEncryptionKey:
                     case AuthorizationState::MissingDependency:
+                    case AuthorizationState::ClosingSession:
                     case AuthorizationState::Failed:
                         return 0;
                     case AuthorizationState::WaitingPhoneNumber:
@@ -600,7 +696,6 @@ MainWindow::MainWindow(SessionManager &sessionManager,
          passwordInput,
          submitButton,
          saveProfileButton,
-         sendPhoneButton,
          submitCodeButton,
          submitPasswordButton,
          logoutButton,
@@ -613,12 +708,46 @@ MainWindow::MainWindow(SessionManager &sessionManager,
             const bool hasPassword = !passwordInput->text().trimmed().isEmpty();
             const bool tdLibReadyForActions = tdLibAdapter_.isTdLibAvailable();
             const bool sessionActive = state == AuthorizationState::Ready;
-            const bool waitingPhone = state == AuthorizationState::WaitingPhoneNumber;
             const bool waitingCode = state == AuthorizationState::WaitingCode;
             const bool waitingPassword = state == AuthorizationState::WaitingPassword;
-            const bool notInitialized = state == AuthorizationState::NotInitialized
-                                        || state == AuthorizationState::WaitingParameters
-                                        || state == AuthorizationState::Failed;
+            bool canContinue = false;
+            QString continueLabel = "Continuar";
+
+            switch (state) {
+                case AuthorizationState::NotInitialized:
+                case AuthorizationState::WaitingParameters:
+                case AuthorizationState::Failed:
+                    continueLabel = "Iniciar flujo";
+                    canContinue = tdLibReadyForActions && hasApiCredentials;
+                    break;
+                case AuthorizationState::WaitingPhoneNumber:
+                    continueLabel = "Enviar telefono";
+                    canContinue = tdLibReadyForActions && hasApiCredentials && hasPhoneNumber;
+                    break;
+                case AuthorizationState::WaitingCode:
+                    continueLabel = "Enviar codigo";
+                    canContinue = tdLibReadyForActions && hasCode;
+                    break;
+                case AuthorizationState::WaitingPassword:
+                    continueLabel = "Enviar contrasena";
+                    canContinue = tdLibReadyForActions && hasPassword;
+                    break;
+                case AuthorizationState::ClosingSession:
+                    continueLabel = "Cerrando sesion...";
+                    break;
+                case AuthorizationState::WaitingEncryptionKey:
+                    continueLabel = "Inicializando...";
+                    break;
+                case AuthorizationState::WaitingOtherDeviceConfirmation:
+                    continueLabel = "Esperando confirmacion...";
+                    break;
+                case AuthorizationState::Ready:
+                    continueLabel = "Sesion activa";
+                    break;
+                case AuthorizationState::MissingDependency:
+                    continueLabel = "TDLib ausente";
+                    break;
+            }
 
             apiIdInput->setEnabled(!sessionActive);
             apiHashInput->setEnabled(!sessionActive);
@@ -626,10 +755,9 @@ MainWindow::MainWindow(SessionManager &sessionManager,
             codeInput->setEnabled(waitingCode);
             passwordInput->setEnabled(waitingPassword);
 
-            submitButton->setEnabled(tdLibReadyForActions && hasApiCredentials && !sessionActive);
+            submitButton->setText(continueLabel);
+            submitButton->setEnabled(canContinue);
             saveProfileButton->setEnabled(hasApiCredentials || hasPhoneNumber);
-            sendPhoneButton->setEnabled(tdLibReadyForActions && hasApiCredentials && hasPhoneNumber
-                                        && (waitingPhone || notInitialized));
             submitCodeButton->setEnabled(tdLibReadyForActions && waitingCode && hasCode);
             submitPasswordButton->setEnabled(tdLibReadyForActions && waitingPassword && hasPassword);
             logoutButton->setEnabled(tdLibReadyForActions && sessionActive);
@@ -679,35 +807,83 @@ MainWindow::MainWindow(SessionManager &sessionManager,
             analyticsModuleLabel->setText(QString::fromStdString(analyticsStore_.status()));
         };
 
-    auto updateTelegramDataUi = [accountLabel, chatList, this]() {
+    auto updateTelegramDataUi = [accountLabel, chatList, messagesList, this]() {
         const QString selfDisplayName = tdLibAdapter_.selfDisplayName();
         accountLabel->setText(selfDisplayName.isEmpty()
                                   ? "Cuenta: pendiente"
                                   : QString("Cuenta: %1").arg(selfDisplayName));
 
+        const QString selectedChatId = tdLibAdapter_.selectedChatId();
+        const auto chatEntries = tdLibAdapter_.chatEntries();
+        chatList->blockSignals(true);
         chatList->clear();
-        const QStringList chatTitles = tdLibAdapter_.chatTitles();
-        if (chatTitles.isEmpty()) {
+        if (chatEntries.isEmpty()) {
             chatList->addItem("Sin chats cargados todavia.");
+            chatList->setEnabled(false);
+            chatList->blockSignals(false);
+            messagesList->clear();
+            messagesList->addItem("Selecciona un chat para leer mensajes.");
             return;
         }
 
-        for (const QString &title : chatTitles) {
-            chatList->addItem(title);
+        chatList->setEnabled(true);
+        int selectedRow = -1;
+        for (int index = 0; index < chatEntries.size(); ++index) {
+            const auto &entry = chatEntries[index];
+            auto *item = new QListWidgetItem(entry.second, chatList);
+            item->setData(Qt::UserRole, entry.first);
+            if (!selectedChatId.isEmpty() && entry.first == selectedChatId) {
+                selectedRow = index;
+            }
         }
+        if (selectedRow >= 0) {
+            chatList->setCurrentRow(selectedRow);
+        }
+        chatList->blockSignals(false);
+
+        messagesList->clear();
+        const QStringList messages = tdLibAdapter_.selectedChatMessages();
+        if (messages.isEmpty()) {
+            messagesList->addItem("No hay mensajes cargados para este chat.");
+            return;
+        }
+
+        for (const QString &line : messages) {
+            messagesList->addItem(line);
+        }
+        messagesList->scrollToBottom();
+    };
+
+    auto updateMessagingControls = [this, messageInput, sendMessageButton]() {
+        const bool canSend = tdLibAdapter_.authorizationState() == AuthorizationState::Ready
+                             && !tdLibAdapter_.selectedChatId().isEmpty()
+                             && !messageInput->text().trimmed().isEmpty();
+        sendMessageButton->setEnabled(canSend);
     };
 
     updateTelegramUi();
     updateTelegramDataUi();
+    updateMessagingControls();
     refreshProfilesUi();
     updateAuthControls();
     updatePhaseGuide();
     updateModuleStatus();
 
-    connect(submitButton, &QPushButton::clicked, this, [this, apiIdInput, apiHashInput, phoneInput]() {
-        tdLibAdapter_.submitBootstrap(apiIdInput->text(),
-                                      apiHashInput->text(),
-                                      phoneInput->text());
+    connect(submitButton, &QPushButton::clicked, this, [this, apiIdInput, apiHashInput, phoneInput, codeInput, passwordInput]() {
+        const AuthorizationState state = tdLibAdapter_.authorizationState();
+        if (state == AuthorizationState::WaitingCode) {
+            tdLibAdapter_.submitAuthenticationCode(codeInput->text());
+            return;
+        }
+
+        if (state == AuthorizationState::WaitingPassword) {
+            tdLibAdapter_.submitAuthenticationPassword(passwordInput->text());
+            return;
+        }
+
+        tdLibAdapter_.continueAuthorization(apiIdInput->text(),
+                                            apiHashInput->text(),
+                                            phoneInput->text());
     });
 
     connect(saveProfileButton,
@@ -721,10 +897,6 @@ MainWindow::MainWindow(SessionManager &sessionManager,
                 refreshProfilesUi();
                 updateModuleStatus();
             });
-
-    connect(sendPhoneButton, &QPushButton::clicked, this, [this, phoneInput]() {
-        tdLibAdapter_.submitPhoneNumber(phoneInput->text());
-    });
 
     connect(logoutButton, &QPushButton::clicked, this, [this]() {
         tdLibAdapter_.logout();
@@ -745,7 +917,7 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     connect(loadProfileButton,
             &QPushButton::clicked,
             this,
-            [this, profilesList, profileNameInput, apiIdInput, apiHashInput, phoneInput]() {
+            [this, profilesList, profileNameInput, apiIdInput, apiHashInput, phoneInput, codeInput, passwordInput]() {
                 QListWidgetItem *item = profilesList->currentItem();
                 if (item == nullptr) {
                     return;
@@ -761,6 +933,12 @@ MainWindow::MainWindow(SessionManager &sessionManager,
                 apiIdInput->setText(profile->apiId);
                 apiHashInput->setText(profile->apiHash);
                 phoneInput->setText(profile->phoneNumber);
+                codeInput->clear();
+                passwordInput->clear();
+
+                tdLibAdapter_.continueAuthorization(apiIdInput->text(),
+                                                    apiHashInput->text(),
+                                                    phoneInput->text());
             });
 
     connect(removeProfileButton,
@@ -788,33 +966,46 @@ MainWindow::MainWindow(SessionManager &sessionManager,
                 updateModuleStatus();
             });
 
+    connect(chatList, &QListWidget::itemSelectionChanged, this, [this, chatList, messageInput, updateMessagingControls]() {
+        QListWidgetItem *item = chatList->currentItem();
+        if (item == nullptr) {
+            updateMessagingControls();
+            return;
+        }
+
+        const QString chatId = item->data(Qt::UserRole).toString();
+        if (!chatId.isEmpty()) {
+            tdLibAdapter_.requestChatHistory(chatId);
+        }
+        messageInput->setFocus();
+        updateMessagingControls();
+    });
+
+    connect(sendMessageButton, &QPushButton::clicked, this, [this, messageInput, updateMessagingControls]() {
+        const QString text = messageInput->text().trimmed();
+        if (text.isEmpty()) {
+            return;
+        }
+        tdLibAdapter_.sendTextMessage(tdLibAdapter_.selectedChatId(), text);
+        messageInput->clear();
+        updateMessagingControls();
+    });
+
     connect(&tdLibAdapter_, &TDLibAdapter::stateChanged, this, updateTelegramUi);
     connect(&tdLibAdapter_, &TDLibAdapter::stateChanged, this, updateAuthControls);
     connect(&tdLibAdapter_, &TDLibAdapter::stateChanged, this, updatePhaseGuide);
     connect(&tdLibAdapter_, &TDLibAdapter::stateChanged, this, updateModuleStatus);
+    connect(&tdLibAdapter_, &TDLibAdapter::stateChanged, this, updateMessagingControls);
     connect(&tdLibAdapter_, &TDLibAdapter::dataChanged, this, updateTelegramDataUi);
     connect(&tdLibAdapter_, &TDLibAdapter::dataChanged, this, updateModuleStatus);
+    connect(&tdLibAdapter_, &TDLibAdapter::dataChanged, this, updateMessagingControls);
     connect(phaseSelector, &QComboBox::currentIndexChanged, this, updatePhaseGuide);
     connect(apiIdInput, &QLineEdit::textChanged, this, updateAuthControls);
     connect(apiHashInput, &QLineEdit::textChanged, this, updateAuthControls);
     connect(phoneInput, &QLineEdit::textChanged, this, updateAuthControls);
     connect(codeInput, &QLineEdit::textChanged, this, updateAuthControls);
     connect(passwordInput, &QLineEdit::textChanged, this, updateAuthControls);
-
-    if (!apiIdInput->text().isEmpty() && !apiHashInput->text().isEmpty()) {
-        QTimer::singleShot(0, this, [this, apiIdInput, apiHashInput, phoneInput]() {
-            tdLibAdapter_.submitBootstrap(apiIdInput->text(),
-                                          apiHashInput->text(),
-                                          phoneInput->text());
-        });
-    }
-
-    if (!codeInput->text().isEmpty()) {
-        QTimer::singleShot(250, this, [this, codeInput]() {
-            tdLibAdapter_.submitAuthenticationCode(codeInput->text());
-        });
-    }
-
+    connect(messageInput, &QLineEdit::textChanged, this, updateMessagingControls);
     scrollArea->setWidget(content);
     setCentralWidget(scrollArea);
 }
