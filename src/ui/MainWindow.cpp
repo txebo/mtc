@@ -12,6 +12,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -21,6 +22,7 @@
 #include <QPlainTextEdit>
 #include <QProcessEnvironment>
 #include <QPushButton>
+#include <QPixmap>
 #include <QScrollArea>
 #include <QString>
 #include <QStandardPaths>
@@ -380,6 +382,21 @@ MainWindow::MainWindow(SessionManager &sessionManager,
     auto *messagesList = new QListWidget(messagingBox);
     messagesList->setMinimumHeight(180);
     messagingLayout->addWidget(messagesList);
+
+    auto *previewTitleLabel = new QLabel("Vista previa: sin seleccionar", messagingBox);
+    previewTitleLabel->setWordWrap(true);
+    messagingLayout->addWidget(previewTitleLabel);
+
+    auto *mediaPreview = new QLabel("Selecciona un mensaje multimedia para ver su vista previa.", messagingBox);
+    mediaPreview->setMinimumHeight(220);
+    mediaPreview->setAlignment(Qt::AlignCenter);
+    mediaPreview->setWordWrap(true);
+    mediaPreview->setStyleSheet("border: 1px solid #d5dbe3; border-radius: 8px; background: #fafbfc; padding: 10px;");
+    messagingLayout->addWidget(mediaPreview);
+
+    auto *previewMetaLabel = new QLabel("Tipo: -", messagingBox);
+    previewMetaLabel->setWordWrap(true);
+    messagingLayout->addWidget(previewMetaLabel);
 
     auto *messageComposerLayout = new QHBoxLayout();
     messageComposerLayout->setSpacing(10);
@@ -820,7 +837,83 @@ MainWindow::MainWindow(SessionManager &sessionManager,
             analyticsModuleLabel->setText(QString::fromStdString(analyticsStore_.status()));
         };
 
-    auto updateTelegramDataUi = [accountLabel, chatList, selectedChatLabel, messagesList, this]() {
+    auto clearPreviewUi = [previewTitleLabel, mediaPreview, previewMetaLabel]() {
+        previewTitleLabel->setText("Vista previa: sin seleccionar");
+        mediaPreview->setPixmap(QPixmap());
+        mediaPreview->setText("Selecciona un mensaje multimedia para ver su vista previa.");
+        previewMetaLabel->setText("Tipo: -");
+    };
+
+    auto updatePreviewFromItem = [previewTitleLabel, mediaPreview, previewMetaLabel](QListWidgetItem *item) {
+        if (item == nullptr) {
+            previewTitleLabel->setText("Vista previa: sin seleccionar");
+            mediaPreview->setPixmap(QPixmap());
+            mediaPreview->setText("Selecciona un mensaje multimedia para ver su vista previa.");
+            previewMetaLabel->setText("Tipo: -");
+            return;
+        }
+
+        const QString line = item->text().trimmed();
+        const QString localPath = item->data(Qt::UserRole + 1).toString().trimmed();
+        const qint64 fileId = item->data(Qt::UserRole + 2).toLongLong();
+        const bool canDownload = item->data(Qt::UserRole + 3).toBool();
+        const QString contentType = item->data(Qt::UserRole + 4).toString().trimmed();
+        previewTitleLabel->setText(line.isEmpty() ? "Vista previa: mensaje" : QString("Vista previa: %1").arg(line));
+
+        const bool isImageLikeType = contentType == "photo"
+                                     || contentType == "sticker"
+                                     || contentType == "animation";
+
+        if (localPath.isEmpty()) {
+            mediaPreview->setPixmap(QPixmap());
+            if (fileId > 0 && canDownload) {
+                mediaPreview->setText("Archivo disponible. Haz doble clic en el mensaje para descargar.");
+            } else if (fileId > 0) {
+                mediaPreview->setText("Archivo multimedia aun no disponible para vista previa.");
+            } else {
+                mediaPreview->setText("Mensaje sin archivo multimedia.");
+            }
+            previewMetaLabel->setText(QString("Tipo: %1").arg(contentType.isEmpty() ? "-" : contentType));
+            return;
+        }
+
+        if (!QFileInfo::exists(localPath)) {
+            mediaPreview->setPixmap(QPixmap());
+            mediaPreview->setText("El archivo local ya no existe en disco.");
+            previewMetaLabel->setText(QString("Tipo: %1\nRuta: %2")
+                                          .arg(contentType.isEmpty() ? "-" : contentType, localPath));
+            return;
+        }
+
+        if (isImageLikeType) {
+            const QPixmap pixmap(localPath);
+            if (!pixmap.isNull()) {
+                const QSize targetSize = mediaPreview->size().isValid()
+                                             ? mediaPreview->size()
+                                             : QSize(520, 280);
+                mediaPreview->setText(QString());
+                mediaPreview->setPixmap(pixmap.scaled(targetSize,
+                                                      Qt::KeepAspectRatio,
+                                                      Qt::SmoothTransformation));
+                previewMetaLabel->setText(QString("Tipo: %1\nRuta: %2")
+                                              .arg(contentType, localPath));
+                return;
+            }
+        }
+
+        mediaPreview->setPixmap(QPixmap());
+        mediaPreview->setText("Archivo descargado. Vista previa grafica no disponible para este tipo.");
+        previewMetaLabel->setText(QString("Tipo: %1\nRuta: %2")
+                                      .arg(contentType.isEmpty() ? "-" : contentType, localPath));
+    };
+
+    auto updateTelegramDataUi = [accountLabel,
+                                 chatList,
+                                 selectedChatLabel,
+                                 messagesList,
+                                 clearPreviewUi,
+                                 updatePreviewFromItem,
+                                 this]() {
         const QString selfDisplayName = tdLibAdapter_.selfDisplayName();
         accountLabel->setText(selfDisplayName.isEmpty()
                                   ? "Cuenta: pendiente"
@@ -838,6 +931,7 @@ MainWindow::MainWindow(SessionManager &sessionManager,
             selectedChatLabel->setText("Chat activo: sin seleccionar");
             messagesList->clear();
             messagesList->addItem("Selecciona un chat para leer mensajes.");
+            clearPreviewUi();
             return;
         }
 
@@ -867,6 +961,7 @@ MainWindow::MainWindow(SessionManager &sessionManager,
         const QList<ChatMessageEntry> messageEntries = tdLibAdapter_.selectedChatMessageEntries();
         if (messageEntries.isEmpty()) {
             messagesList->addItem("No hay mensajes cargados para este chat.");
+            clearPreviewUi();
             return;
         }
 
@@ -888,6 +983,12 @@ MainWindow::MainWindow(SessionManager &sessionManager,
             item->setData(Qt::UserRole + 2, entry.fileId);
             item->setData(Qt::UserRole + 3, entry.canDownload);
             item->setData(Qt::UserRole + 4, entry.contentType);
+            if (!entry.localPath.isEmpty()
+                && (entry.contentType == "photo"
+                    || entry.contentType == "sticker"
+                    || entry.contentType == "animation")) {
+                item->setIcon(QIcon(entry.localPath));
+            }
             if (entry.fileId > 0) {
                 if (!entry.localPath.isEmpty()) {
                     item->setToolTip(QString("Doble clic para abrir: %1").arg(entry.localPath));
@@ -899,6 +1000,10 @@ MainWindow::MainWindow(SessionManager &sessionManager,
             }
         }
         messagesList->scrollToBottom();
+        if (messagesList->currentItem() == nullptr && messagesList->count() > 0) {
+            messagesList->setCurrentRow(messagesList->count() - 1);
+        }
+        updatePreviewFromItem(messagesList->currentItem());
     };
 
     auto updateMessagingControls = [this, messageInput, sendMessageButton, attachMediaButton]() {
@@ -1053,6 +1158,10 @@ MainWindow::MainWindow(SessionManager &sessionManager,
                                        messageInput->text());
         messageInput->clear();
         updateMessagingControls();
+    });
+
+    connect(messagesList, &QListWidget::itemSelectionChanged, this, [messagesList, updatePreviewFromItem]() {
+        updatePreviewFromItem(messagesList->currentItem());
     });
 
     connect(messagesList, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *item) {
