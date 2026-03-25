@@ -143,6 +143,12 @@ qint64 jsonToInt64(const QJsonValue &value) {
     return value.toVariant().toLongLong();
 }
 
+bool fileIsDownloaded(const QJsonObject &fileObject) {
+    const QJsonObject localObject = fileObject.value("local").toObject();
+    return localObject.value("is_downloading_completed").toBool(false)
+           && !localObject.value("path").toString().trimmed().isEmpty();
+}
+
 QString contentTypeKey(const QString &contentType) {
     if (contentType == "messageText") {
         return "text";
@@ -207,7 +213,35 @@ QJsonObject bestPhotoFileObject(const QJsonObject &photoObject) {
     return bestFile;
 }
 
-QJsonObject fileObjectFromContent(const QJsonObject &content) {
+QJsonObject bestDownloadedPhotoFileObject(const QJsonObject &photoObject) {
+    const QJsonArray sizes = photoObject.value("sizes").toArray();
+    QJsonObject bestFile;
+    qint64 bestScore = -1;
+
+    for (const QJsonValue &sizeValue : sizes) {
+        const QJsonObject sizeObject = sizeValue.toObject();
+        const QJsonObject fileObject = sizeObject.value("photo").toObject();
+        if (fileObject.isEmpty() || !fileIsDownloaded(fileObject)) {
+            continue;
+        }
+
+        const qint64 width = sizeObject.value("width").toInt();
+        const qint64 height = sizeObject.value("height").toInt();
+        const qint64 score = width * height;
+        if (bestFile.isEmpty() || score >= bestScore) {
+            bestFile = fileObject;
+            bestScore = score;
+        }
+    }
+
+    return bestFile;
+}
+
+QJsonObject thumbnailFileFromObject(const QJsonObject &object) {
+    return object.value("thumbnail").toObject().value("file").toObject();
+}
+
+QJsonObject primaryFileObjectFromContent(const QJsonObject &content) {
     const QString type = content.value("@type").toString();
     if (type == "messagePhoto") {
         return bestPhotoFileObject(content.value("photo").toObject());
@@ -236,29 +270,92 @@ QJsonObject fileObjectFromContent(const QJsonObject &content) {
     return QJsonObject();
 }
 
-void applyFileMetadataToEntry(const QJsonObject &fileObject, ChatMessageEntry *entry) {
-    if (entry == nullptr || fileObject.isEmpty()) {
-        return;
+struct FileMetadata {
+    qint64 fileId = 0;
+    QString localPath;
+    bool canDownload = false;
+};
+
+FileMetadata fileMetadataFromObject(const QJsonObject &fileObject) {
+    FileMetadata metadata;
+    if (fileObject.isEmpty()) {
+        return metadata;
     }
 
-    const qint64 fileId = jsonToInt64(fileObject.value("id"));
-    if (fileId <= 0) {
-        return;
+    metadata.fileId = jsonToInt64(fileObject.value("id"));
+    if (metadata.fileId <= 0) {
+        return metadata;
     }
 
     const QJsonObject localObject = fileObject.value("local").toObject();
     const bool isDownloaded = localObject.value("is_downloading_completed").toBool(false);
-    QString localPath = localObject.value("path").toString().trimmed();
+    metadata.localPath = localObject.value("path").toString().trimmed();
     if (!isDownloaded) {
-        localPath.clear();
+        metadata.localPath.clear();
+    }
+    metadata.canDownload = localObject.value("can_be_downloaded").toBool(false);
+    if (!metadata.localPath.isEmpty()) {
+        metadata.canDownload = false;
+    }
+    return metadata;
+}
+
+QJsonObject previewFileObjectFromContent(const QJsonObject &content) {
+    const QString type = content.value("@type").toString();
+    if (type == "messagePhoto") {
+        const QJsonObject photo = content.value("photo").toObject();
+        const QJsonObject downloaded = bestDownloadedPhotoFileObject(photo);
+        if (!downloaded.isEmpty()) {
+            return downloaded;
+        }
+        return bestPhotoFileObject(photo);
+    }
+    if (type == "messageVideo") {
+        const QJsonObject videoObject = content.value("video").toObject();
+        const QJsonObject thumbnailFile = thumbnailFileFromObject(videoObject);
+        if (!thumbnailFile.isEmpty()) {
+            return thumbnailFile;
+        }
+        return videoObject.value("video").toObject();
+    }
+    if (type == "messageDocument") {
+        const QJsonObject documentObject = content.value("document").toObject();
+        const QJsonObject thumbnailFile = thumbnailFileFromObject(documentObject);
+        if (!thumbnailFile.isEmpty()) {
+            return thumbnailFile;
+        }
+        return documentObject.value("document").toObject();
+    }
+    if (type == "messageAnimation") {
+        const QJsonObject animationObject = content.value("animation").toObject();
+        const QJsonObject thumbnailFile = thumbnailFileFromObject(animationObject);
+        if (!thumbnailFile.isEmpty()) {
+            return thumbnailFile;
+        }
+        return animationObject.value("animation").toObject();
+    }
+    if (type == "messageSticker") {
+        const QJsonObject stickerObject = content.value("sticker").toObject();
+        const QJsonObject thumbnailFile = thumbnailFileFromObject(stickerObject);
+        if (!thumbnailFile.isEmpty()) {
+            return thumbnailFile;
+        }
+        return stickerObject.value("sticker").toObject();
+    }
+    if (type == "messageVideoNote") {
+        const QJsonObject videoNoteObject = content.value("video_note").toObject();
+        const QJsonObject thumbnailFile = thumbnailFileFromObject(videoNoteObject);
+        if (!thumbnailFile.isEmpty()) {
+            return thumbnailFile;
+        }
+        return videoNoteObject.value("video").toObject();
     }
 
-    entry->fileId = fileId;
-    entry->localPath = localPath;
-    entry->canDownload = localObject.value("can_be_downloaded").toBool(false);
-    if (!entry->localPath.isEmpty()) {
-        entry->canDownload = false;
+    if (type == "messageAudio") {
+        return content.value("audio").toObject().value("album_cover_thumbnail").toObject().value("file").toObject();
     }
+
+    return primaryFileObjectFromContent(content);
 }
 
 ChatMessageEntry chatMessageEntryFromObject(const QJsonObject &messageObject) {
@@ -268,7 +365,23 @@ ChatMessageEntry chatMessageEntryFromObject(const QJsonObject &messageObject) {
 
     const QJsonObject content = messageObject.value("content").toObject();
     entry.contentType = contentTypeKey(content.value("@type").toString());
-    applyFileMetadataToEntry(fileObjectFromContent(content), &entry);
+
+    const FileMetadata primaryMetadata = fileMetadataFromObject(primaryFileObjectFromContent(content));
+    entry.fileId = primaryMetadata.fileId;
+    entry.localPath = primaryMetadata.localPath;
+    entry.canDownload = primaryMetadata.canDownload;
+
+    const FileMetadata previewMetadata = fileMetadataFromObject(previewFileObjectFromContent(content));
+    entry.previewFileId = previewMetadata.fileId;
+    entry.previewLocalPath = previewMetadata.localPath;
+    entry.previewCanDownload = previewMetadata.canDownload;
+
+    if (entry.previewFileId <= 0) {
+        entry.previewFileId = entry.fileId;
+        entry.previewLocalPath = entry.localPath;
+        entry.previewCanDownload = entry.canDownload;
+    }
+
     return entry;
 }
 
@@ -874,21 +987,32 @@ void TDLibAdapter::handleResponse(const char *response) {
         bool canDownload = localObject.value("can_be_downloaded").toBool(false);
         if (!localPath.isEmpty()) {
             canDownload = false;
+            downloadRequestsInFlight_.remove(fileId);
+        } else if (!canDownload) {
+            downloadRequestsInFlight_.remove(fileId);
         }
 
         bool changed = false;
         for (ChatMessageEntry &entry : selectedChatMessageEntries_) {
-            if (entry.fileId != fileId) {
-                continue;
+            if (entry.fileId == fileId) {
+                if (entry.localPath != localPath) {
+                    entry.localPath = localPath;
+                    changed = true;
+                }
+                if (entry.canDownload != canDownload) {
+                    entry.canDownload = canDownload;
+                    changed = true;
+                }
             }
-
-            if (entry.localPath != localPath) {
-                entry.localPath = localPath;
-                changed = true;
-            }
-            if (entry.canDownload != canDownload) {
-                entry.canDownload = canDownload;
-                changed = true;
+            if (entry.previewFileId == fileId) {
+                if (entry.previewLocalPath != localPath) {
+                    entry.previewLocalPath = localPath;
+                    changed = true;
+                }
+                if (entry.previewCanDownload != canDownload) {
+                    entry.previewCanDownload = canDownload;
+                    changed = true;
+                }
             }
         }
 
@@ -914,6 +1038,7 @@ void TDLibAdapter::clearSessionData() {
     selectedChatId_.clear();
     selectedChatMessages_.clear();
     selectedChatMessageEntries_.clear();
+    downloadRequestsInFlight_.clear();
     emit dataChanged();
 }
 
@@ -1039,6 +1164,7 @@ void TDLibAdapter::requestChatHistory(const QString &chatId) {
     selectedChatId_ = trimmedChatId;
     selectedChatMessages_.clear();
     selectedChatMessageEntries_.clear();
+    downloadRequestsInFlight_.clear();
     emit dataChanged();
 
     sendRequest(std::string("{\"@type\":\"getChatHistory\",\"chat_id\":")
@@ -1129,6 +1255,9 @@ void TDLibAdapter::requestFileDownload(qint64 fileId) {
     if (fileId <= 0) {
         return;
     }
+    if (downloadRequestsInFlight_.contains(fileId)) {
+        return;
+    }
 
     QJsonObject request;
     request["@type"] = "downloadFile";
@@ -1137,6 +1266,7 @@ void TDLibAdapter::requestFileDownload(qint64 fileId) {
     request["offset"] = 0;
     request["limit"] = 0;
     request["synchronous"] = false;
+    downloadRequestsInFlight_.insert(fileId);
     sendRequest(QJsonDocument(request).toJson(QJsonDocument::Compact).toStdString());
     appendFlowLog(QString("download_file file_id=%1").arg(fileId));
 }

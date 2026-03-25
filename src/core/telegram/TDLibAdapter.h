@@ -4,6 +4,7 @@
 #include <QList>
 #include <QMap>
 #include <QPair>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 
@@ -35,6 +36,9 @@ struct ChatMessageEntry {
     QString localPath;
     qint64 fileId = 0;
     bool canDownload = false;
+    QString previewLocalPath;
+    qint64 previewFileId = 0;
+    bool previewCanDownload = false;
 };
 
 class TDLibAdapter : public QObject {
@@ -105,6 +109,7 @@ private:
     QString selectedChatId_;
     QStringList selectedChatMessages_;
     QList<ChatMessageEntry> selectedChatMessageEntries_;
+    QSet<qint64> downloadRequestsInFlight_;
     bool tdlibParametersSent_ = false;
     bool initialDataRequested_ = false;
     bool pendingPhoneNumberSubmission_ = false;

@@ -857,6 +857,9 @@ MainWindow::MainWindow(SessionManager &sessionManager,
         const QString localPath = item->data(Qt::UserRole + 1).toString().trimmed();
         const qint64 fileId = item->data(Qt::UserRole + 2).toLongLong();
         const bool canDownload = item->data(Qt::UserRole + 3).toBool();
+        const QString previewLocalPath = item->data(Qt::UserRole + 5).toString().trimmed();
+        const qint64 previewFileId = item->data(Qt::UserRole + 6).toLongLong();
+        const bool previewCanDownload = item->data(Qt::UserRole + 7).toBool();
         const QString contentType = item->data(Qt::UserRole + 4).toString().trimmed();
         previewTitleLabel->setText(line.isEmpty() ? "Vista previa: mensaje" : QString("Vista previa: %1").arg(line));
 
@@ -864,11 +867,15 @@ MainWindow::MainWindow(SessionManager &sessionManager,
                                      || contentType == "sticker"
                                      || contentType == "animation";
 
-        if (localPath.isEmpty()) {
+        const QString effectivePreviewPath = previewLocalPath.isEmpty() ? localPath : previewLocalPath;
+        const qint64 effectivePreviewFileId = previewFileId > 0 ? previewFileId : fileId;
+        const bool effectivePreviewCanDownload = previewFileId > 0 ? previewCanDownload : canDownload;
+
+        if (effectivePreviewPath.isEmpty()) {
             mediaPreview->setPixmap(QPixmap());
-            if (fileId > 0 && canDownload) {
-                mediaPreview->setText("Archivo disponible. Haz doble clic en el mensaje para descargar.");
-            } else if (fileId > 0) {
+            if (effectivePreviewFileId > 0 && effectivePreviewCanDownload) {
+                mediaPreview->setText("Vista previa disponible. Selecciona el mensaje y espera la descarga automatica.");
+            } else if (effectivePreviewFileId > 0) {
                 mediaPreview->setText("Archivo multimedia aun no disponible para vista previa.");
             } else {
                 mediaPreview->setText("Mensaje sin archivo multimedia.");
@@ -877,16 +884,16 @@ MainWindow::MainWindow(SessionManager &sessionManager,
             return;
         }
 
-        if (!QFileInfo::exists(localPath)) {
+        if (!QFileInfo::exists(effectivePreviewPath)) {
             mediaPreview->setPixmap(QPixmap());
             mediaPreview->setText("El archivo local ya no existe en disco.");
             previewMetaLabel->setText(QString("Tipo: %1\nRuta: %2")
-                                          .arg(contentType.isEmpty() ? "-" : contentType, localPath));
+                                          .arg(contentType.isEmpty() ? "-" : contentType, effectivePreviewPath));
             return;
         }
 
         if (isImageLikeType) {
-            const QPixmap pixmap(localPath);
+            const QPixmap pixmap(effectivePreviewPath);
             if (!pixmap.isNull()) {
                 const QSize targetSize = mediaPreview->size().isValid()
                                              ? mediaPreview->size()
@@ -896,7 +903,7 @@ MainWindow::MainWindow(SessionManager &sessionManager,
                                                       Qt::KeepAspectRatio,
                                                       Qt::SmoothTransformation));
                 previewMetaLabel->setText(QString("Tipo: %1\nRuta: %2")
-                                              .arg(contentType, localPath));
+                                              .arg(contentType, effectivePreviewPath));
                 return;
             }
         }
@@ -904,7 +911,7 @@ MainWindow::MainWindow(SessionManager &sessionManager,
         mediaPreview->setPixmap(QPixmap());
         mediaPreview->setText("Archivo descargado. Vista previa grafica no disponible para este tipo.");
         previewMetaLabel->setText(QString("Tipo: %1\nRuta: %2")
-                                      .arg(contentType.isEmpty() ? "-" : contentType, localPath));
+                                      .arg(contentType.isEmpty() ? "-" : contentType, effectivePreviewPath));
     };
 
     auto updateTelegramDataUi = [accountLabel,
@@ -983,11 +990,15 @@ MainWindow::MainWindow(SessionManager &sessionManager,
             item->setData(Qt::UserRole + 2, entry.fileId);
             item->setData(Qt::UserRole + 3, entry.canDownload);
             item->setData(Qt::UserRole + 4, entry.contentType);
-            if (!entry.localPath.isEmpty()
+            item->setData(Qt::UserRole + 5, entry.previewLocalPath);
+            item->setData(Qt::UserRole + 6, entry.previewFileId);
+            item->setData(Qt::UserRole + 7, entry.previewCanDownload);
+            const QString iconPath = entry.previewLocalPath.isEmpty() ? entry.localPath : entry.previewLocalPath;
+            if (!iconPath.isEmpty()
                 && (entry.contentType == "photo"
                     || entry.contentType == "sticker"
                     || entry.contentType == "animation")) {
-                item->setIcon(QIcon(entry.localPath));
+                item->setIcon(QIcon(iconPath));
             }
             if (entry.fileId > 0) {
                 if (!entry.localPath.isEmpty()) {
@@ -1160,8 +1171,19 @@ MainWindow::MainWindow(SessionManager &sessionManager,
         updateMessagingControls();
     });
 
-    connect(messagesList, &QListWidget::itemSelectionChanged, this, [messagesList, updatePreviewFromItem]() {
-        updatePreviewFromItem(messagesList->currentItem());
+    connect(messagesList, &QListWidget::itemSelectionChanged, this, [this, messagesList, updatePreviewFromItem]() {
+        QListWidgetItem *item = messagesList->currentItem();
+        updatePreviewFromItem(item);
+        if (item == nullptr) {
+            return;
+        }
+
+        const QString previewLocalPath = item->data(Qt::UserRole + 5).toString().trimmed();
+        const qint64 previewFileId = item->data(Qt::UserRole + 6).toLongLong();
+        const bool previewCanDownload = item->data(Qt::UserRole + 7).toBool();
+        if (previewLocalPath.isEmpty() && previewFileId > 0 && previewCanDownload) {
+            tdLibAdapter_.requestFileDownload(previewFileId);
+        }
     });
 
     connect(messagesList, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *item) {
